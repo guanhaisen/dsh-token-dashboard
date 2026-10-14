@@ -1,0 +1,19 @@
+# dsh-token-dashboard bundle patch.
+#
+# One insert mounts the Host half: the `llm/stream` recorder, the on-disk
+# ledger, and the dashboard route. The browser half is declared by
+# package.json's `dsh.client` and binds to this row.
+- insert:
+    - id: dsh-token-dashboard
+      name: 'dsh-token-dashboard'
+      config:
+        # Days of daily aggregation kept on disk.
+        retentionDays: 730
+        # Detail records kept, newest first.
+        recentLimit: 300
+        # Fixed day boundary offset; 480 is UTC+8.
+        utcOffsetMinutes: 480
+        # Record the project (cwd) dimension.
+        trackProjects: true
+        # Debounce before a dirty ledger reaches disk.
+        flushDebounceMs: 2000

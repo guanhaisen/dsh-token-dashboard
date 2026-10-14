@@ -1,0 +1,66 @@
+{
+  "name": "dsh-token-dashboard",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Dashboard for daily token usage in DeepSeek Harness: records every model call from the moment it mounts, aggregates by day, model, purpose and project, and shows it at the sidebar foot",
+  "icon": "./icon.svg",
+  "main": "./index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json",
+    "./icon.svg": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "icon.svg",
+    "README.md",
+    "README.zh.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "cordis",
+    "tokens",
+    "token-usage",
+    "usage",
+    "dashboard",
+    "observability"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/guanhaisen/dsh-token-dashboard.git"
+  },
+  "homepage": "https://github.com/guanhaisen/dsh-token-dashboard#readme",
+  "bugs": {
+    "url": "https://github.com/guanhaisen/dsh-token-dashboard/issues"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-primitives"
+      ]
+    }
+  },
+  "scripts": {
+    "test": "node test/run-all.cjs"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "~4.0.4"
+  },
+  "engines": {
+    "node": ">=20",
+    "dsh": "^0.2.0-rc.1"
+  },
+  "license": "MIT"
+}
