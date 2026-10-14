@@ -179,12 +179,12 @@ test/              零依赖测试
 npm test          # 或：node test/run-all.cjs
 ```
 
-7 个文件，171 个断言：
+7 个文件，177 个断言：
 
 | 文件 | 覆盖 |
 |---|---|
 | `ledger-check.cjs` | UTC+8 日界（午夜前后各一毫秒）、bucket 累加与钳位、派生量、增量合并、保留期、容错解析、payload 装配 |
-| `store-check.cjs` | 防抖落盘、原子写、**两个 store 交错落盘不丢计数**、保留期裁剪、明细去重与上限、写盘失败与 logger 抛错的兜底 |
+| `store-check.cjs` | 防抖落盘、原子写、**重启后仍能读回整天的记录**、重复 read 不累加、**两个 store 交错落盘不丢计数**、保留期裁剪、明细去重与上限、写盘失败与 logger 抛错的兜底 |
 | `recorder-check.cjs` | 块原样透传（同一对象引用）、惰性、一次调用一条记录、错误原样 rethrow、消费者提前中止、sink 抛错不污染模型通道 |
 | `route-check.cjs` | 405 / 415 / 400、信封校验、rpcId 回显、未知方法、store 抛错不外泄、四种区间、空账本 |
 | `client-check.cjs` | 在桩 facade 下加载 bundle、slot 注册与顺序、无连接降级、数据源状态机、格式化、图表分桶、zh/en 键集一致 |

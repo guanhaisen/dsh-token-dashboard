@@ -607,9 +607,26 @@ function createLedgerStore(options) {
       state.recent = mergeRecent([state.recent, [record]], recentLimit)
       scheduleFlush()
     },
-    /** The in-memory document plus the last read diagnostic. */
+    /**
+     * The document as it should be read right now.
+     *
+     * This folds the on-disk ledger together with this process's own deltas
+     * rather than returning only the in-memory state. Returning memory alone
+     * was a real bug: the ledger is written by every session in the app, so a
+     * freshly mounted process would report only its own records — a restart
+     * made the dashboard look as though the day had just begun, while the file
+     * on disk held the whole day.
+     *
+     * Reading through the same delta base the flush uses means a read is
+     * consistent with what a flush would produce, minus the write.
+     * @returns the merged document plus the last read diagnostic.
+     */
     read() {
-      return { state, problem: null }
+      const disk = readDisk()
+      applyDelta(disk.days, bucketDelta(state.days, written))
+      disk.recent = mergeRecent([state.recent, disk.recent], recentLimit)
+      disk.updatedAt = Math.max(count(disk.updatedAt), count(state.updatedAt))
+      return { state: disk, problem: null }
     },
     /** Force a synchronous flush (also used on dispose). */
     flush,

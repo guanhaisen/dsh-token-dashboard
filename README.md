@@ -211,12 +211,12 @@ test/              Zero-dependency test suite
 npm test          # or: node test/run-all.cjs
 ```
 
-171 assertions across seven files:
+177 assertions across seven files:
 
 | File | Covers |
 |---|---|
 | `ledger-check.cjs` | UTC+8 day boundary (one millisecond either side of midnight), bucket accumulation and clamping, derived figures, delta merging, retention, defensive parsing, payload assembly |
-| `store-check.cjs` | Debounced flush, atomic write, **interleaved flushes from two stores losing no counts**, retention trimming, detail dedup and cap, write-failure and throwing-logger containment |
+| `store-check.cjs` | Debounced flush, atomic write, **reading the whole day back after a restart**, repeated reads not accumulating, **interleaved flushes from two stores losing no counts**, retention trimming, detail dedup and cap, write-failure and throwing-logger containment |
 | `recorder-check.cjs` | Chunks pass through unchanged (same object identity), laziness, exactly one record per call, errors rethrown unchanged, consumer abandonment, a throwing sink never reaching the model lane |
 | `route-check.cjs` | 405 / 415 / 400, envelope validation, rpcId echo, unknown method, a throwing store not escaping, all four ranges, the empty ledger |
 | `client-check.cjs` | Bundle load under a stub facade, slot registration and ordering, no-connection degradation, the source state machine, formatting, chart bucketing, matching zh/en key sets |

@@ -151,6 +151,95 @@ async function main() {
     assertEqual(state.days['2026-10-14'].inputTokens, 200)
   })
 
+  group('store: reading across a restart')
+
+  test('a freshly mounted store reads the records already on disk', () => {
+    // The regression: `read()` once returned only this process's memory, so a
+    // restart made the dashboard look as though the day had just begun while
+    // the file held the whole day.
+    const io = fakeIo()
+    const first = makeStore(X, io)
+    for (let i = 0; i < 3; i += 1) first.store.append(record({ ts: Date.UTC(2026, 9, 14, 6, 0, i) }))
+    first.runTimers()
+
+    const second = makeStore(X, io)
+    second.store.append(record({ ts: Date.UTC(2026, 9, 14, 6, 0, 30) }))
+
+    const { state } = second.store.read()
+    assertEqual(state.days['2026-10-14'].requests, 4)
+    assertEqual(state.days['2026-10-14'].inputTokens, 400)
+    assertEqual(state.recent.length, 4)
+  })
+
+  test('repeated reads do not accumulate', () => {
+    const io = fakeIo()
+    const first = makeStore(X, io)
+    first.store.append(record())
+    first.runTimers()
+
+    const second = makeStore(X, io)
+    second.store.append(record({ ts: Date.UTC(2026, 9, 14, 6, 0, 9) }))
+
+    assertEqual(second.store.read().state.days['2026-10-14'].requests, 2)
+    assertEqual(second.store.read().state.days['2026-10-14'].requests, 2)
+    assertEqual(second.store.read().state.days['2026-10-14'].requests, 2)
+  })
+
+  test('a read after a flush still matches what landed on disk', () => {
+    const io = fakeIo()
+    const first = makeStore(X, io)
+    first.store.append(record())
+    first.runTimers()
+
+    const second = makeStore(X, io)
+    second.store.append(record({ ts: Date.UTC(2026, 9, 14, 6, 0, 9) }))
+    second.runTimers()
+
+    const read = second.store.read().state
+    const onDisk = X.parseLedger(io.files.get('/state/token-dashboard/ledger.json')).state
+    assertEqual(read.days['2026-10-14'].requests, onDisk.days['2026-10-14'].requests)
+    assertEqual(read.days['2026-10-14'].inputTokens, onDisk.days['2026-10-14'].inputTokens)
+    assertEqual(read.days['2026-10-14'].requests, 2)
+  })
+
+  test('a read never mutates what a later flush would consume', () => {
+    const io = fakeIo()
+    const first = makeStore(X, io)
+    first.store.append(record())
+    first.runTimers()
+
+    const second = makeStore(X, io)
+    second.store.append(record({ ts: Date.UTC(2026, 9, 14, 6, 0, 9) }))
+    // Read several times, then flush: the write must not have doubled.
+    second.store.read()
+    second.store.read()
+    second.runTimers()
+    const onDisk = X.parseLedger(io.files.get('/state/token-dashboard/ledger.json')).state
+    assertEqual(onDisk.days['2026-10-14'].requests, 2)
+    assertEqual(onDisk.days['2026-10-14'].inputTokens, 200)
+  })
+
+  test('sub-maps from a previous process are read back too', () => {
+    const io = fakeIo()
+    const first = makeStore(X, io)
+    first.store.append(record({ cwd: 'D:\\a' }))
+    first.runTimers()
+
+    const second = makeStore(X, io)
+    const { state } = second.store.read()
+    assertEqual(state.days['2026-10-14'].models['workbuddy|deepseek-v4.1-flash'].requests, 1)
+    assertEqual(state.days['2026-10-14'].projects['D:\\a'].requests, 1)
+  })
+
+  test('a corrupt file still reads as an empty ledger', () => {
+    const io = fakeIo()
+    io.files.set('/state/token-dashboard/ledger.json', '{"days":{ truncated')
+    const warnings = []
+    const { store } = makeStore(X, io, { logger: { warn: (m) => warnings.push(m) } })
+    assertEqual(store.read().state.days, {})
+    assert(warnings.length > 0, 'expected a warning about the unreadable ledger')
+  })
+
   group('store: two processes on one ledger')
 
   test('interleaved flushes from two stores keep both sets of counts', () => {
