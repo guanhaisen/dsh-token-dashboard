@@ -120,19 +120,34 @@ Aggregated by **day** (boundary at UTC+8 by default), **model**, **purpose** and
   to `dsh-our-free-model`: it covers only the adapters that plugin wraps, and it
   is pruned on a 90-day window. The two ledgers are independent, and neither
   affects the other.
-- **`inputTokens` is recorded exactly as the provider reported it.** Cache hits
-  are counted separately in `cacheReadTokens` rather than folded in, and nothing
-  is normalized or guessed.
+- **Every field is recorded exactly as the provider reported it.** Cache hits stay
+  in their own counter rather than being folded into `inputTokens`, and nothing is
+  normalized or guessed — the two totals the dashboard shows are arithmetic on the
+  reported numbers, not an interpretation of them.
 - **No price conversion.** There is no reliable per-route price source available
   to the plugin, so the dashboard reports tokens, not money. A cost figure built
   on a guessed rate would be worse than no figure.
 
 ## Reading the numbers
 
-- **Total tokens** = `inputTokens + outputTokens`. Cache reads are deliberately
-  *not* added: they are a re-read of context you already paid for once, and
-  folding them in makes the "total" jump around in a way that does not track work
-  done.
+Two totals are shown, because one number cannot answer both questions:
+
+- **Total tokens** = `inputTokens + outputTokens + cacheReadTokens + cacheWriteTokens`.
+  Every token the provider actually processed. Cache reads belong here: they are
+  real tokens that occupied the context window and were billed, merely at a lower
+  rate. On a warm workload they dominate — a measured session was 99.6% cache
+  reads, so leaving them out would have understated the day by **257×**.
+- **Billable tokens** = `inputTokens + outputTokens`. The cost-shaped subset:
+  tokens billed at the full input rate, plus output. This is the figure a pricing
+  page would multiply out.
+
+Both are always on screen, so neither has to be inferred. The daily chart stacks
+three segments — cache reads (bottom), input, then output — so the bar's height
+is the same total the card reports. Cache is drawn lowest deliberately: at 99% of
+the bar it would otherwise push input and output off the top of the plot.
+
+Other figures:
+
 - **Cache hit rate** = `cacheReadTokens / (inputTokens + cacheReadTokens)`. When
   the denominator is 0 the dashboard shows `—`, not `0%`: "nothing was sent" and
   "nothing was cached" are different facts.
@@ -211,7 +226,7 @@ test/              Zero-dependency test suite
 npm test          # or: node test/run-all.cjs
 ```
 
-177 assertions across seven files:
+187 assertions across seven files:
 
 | File | Covers |
 |---|---|

@@ -410,26 +410,54 @@ test('the clock formats a timestamp and dashes an empty one', () => {
 
 group('client: chart helpers')
 
-test('the peak is the largest stacked total', () => {
+test('the peak is the largest cache-inclusive stacked total', () => {
   const peak = bundle.exports.__internal.chartPeak([
-    { inputTokens: 10, outputTokens: 5 },
-    { inputTokens: 100, outputTokens: 50 },
+    { inputTokens: 10, outputTokens: 5, cacheReadTokens: 900 },
+    { inputTokens: 100, outputTokens: 50, cacheReadTokens: 0 },
   ])
-  assertEqual(peak, 150)
+  assertEqual(peak, 915)
+})
+
+test('a cache-only day still contributes to the peak', () => {
+  const peak = bundle.exports.__internal.chartPeak([{ inputTokens: 0, outputTokens: 0, cacheReadTokens: 5000 }])
+  assertEqual(peak, 5000)
 })
 
 test('an empty day list has a zero peak', () => {
   assertEqual(bundle.exports.__internal.chartPeak([]), 0)
 })
 
-test('a short range maps one column per day', () => {
+test('the segments stack cache, then input, then output', () => {
+  const segments = bundle.exports.__internal.columnSegments({
+    inputTokens: 10, outputTokens: 5, cacheReadTokens: 100,
+  })
+  assertEqual(segments.map((s) => s.key), ['cache', 'in', 'out'])
+  assertEqual(segments.map((s) => s.value), [100, 10, 5])
+})
+
+test('a short range maps one column per day and carries its cache', () => {
   const columns = bundle.exports.__internal.bucketDays([
-    { day: '2026-10-13', inputTokens: 1, outputTokens: 2, requests: 1 },
-    { day: '2026-10-14', inputTokens: 3, outputTokens: 4, requests: 2 },
+    { day: '2026-10-13', inputTokens: 1, outputTokens: 2, cacheReadTokens: 7, requests: 1 },
+    { day: '2026-10-14', inputTokens: 3, outputTokens: 4, cacheReadTokens: 8, requests: 2 },
   ])
   assertEqual(columns.length, 2)
   assertEqual(columns[0].label, '10-13')
   assertEqual(columns[1].inputTokens, 3)
+  assertEqual(columns[0].cacheReadTokens, 7)
+  assertEqual(columns[1].cacheReadTokens, 8)
+})
+
+test('bucketing sums cache reads across the week', () => {
+  const days = []
+  for (let i = 0; i < 60; i += 1) {
+    days.push({
+      day: `2026-10-${String((i % 28) + 1).padStart(2, '0')}`,
+      inputTokens: 1, outputTokens: 1, cacheReadTokens: 10,
+    })
+  }
+  const columns = bundle.exports.__internal.bucketDays(days, 30)
+  const summed = columns.reduce((total, column) => total + column.cacheReadTokens, 0)
+  assertEqual(summed, 600)
 })
 
 test('a long range buckets into at most the column cap', () => {
@@ -461,9 +489,9 @@ test('every key the page needs exists in both dictionaries', () => {
   const { zh, en } = bundle.exports.__internal
   const required = [
     'foot.trigger', 'page.title', 'range.today', 'range.7d', 'range.30d', 'range.all',
-    'chart.title', 'chart.input', 'chart.output', 'chart.empty', 'chart.aria',
-    'kpi.total', 'kpi.input', 'kpi.output', 'kpi.cacheRead', 'kpi.reasoning',
-    'kpi.requests', 'kpi.ttft', 'kpi.avgDuration',
+    'chart.title', 'chart.input', 'chart.output', 'chart.cache', 'chart.empty', 'chart.aria',
+    'kpi.total', 'kpi.billable', 'kpi.billableHint', 'kpi.input', 'kpi.output',
+    'kpi.cacheRead', 'kpi.reasoning', 'kpi.requests', 'kpi.ttft', 'kpi.avgDuration',
     'table.models', 'table.projects', 'table.purposes', 'table.recent', 'table.empty',
     'col.model', 'col.provider', 'col.total', 'col.input', 'col.output', 'col.cacheRead',
     'col.requests', 'col.ttft', 'col.project', 'col.purpose', 'col.time', 'col.duration', 'col.status',

@@ -107,15 +107,29 @@ dsh plugin --profile desktop add 'github:guanhaisen/dsh-token-dashboard#v0.1.0'
   就是这个意思。想要历史，那是一个独立的一次性导入器，不是本插件。
 - **不读取 `~/.dsh/channel-pack/token-ledger.json`。** 那是 `dsh-our-free-model`
   的文件：只覆盖它包装过的 adapter，且按 90 天滚动裁剪。两个账本互不相干。
-- **`inputTokens` 按 provider 上报原样记录。** 缓存命中单列在 `cacheReadTokens`，
-  不做折算，也不做任何猜测性归一化。
+- **每个字段都按 provider 上报原样记录。** 缓存命中留在它自己的计数器里，不折进
+  `inputTokens`；不做归一化，也不做任何猜测。看板上那两个总量是对上报数字做的算术，
+  不是对它们的解释。
 - **不做价格换算。** 插件拿不到可靠的按路由单价，所以看板只讲 token，不讲钱。
   用猜来的单价算出成本，比不给数字更糟。
 
 ## 怎么读这些数字
 
-- **总 token** = `inputTokens + outputTokens`。缓存读取**有意不计入**：那是你已经付过
-  一次的上下文的重复读取，算进去会让"总量"按一种跟实际工作量无关的方式跳动。
+看板给**两个总量**，因为一个数字回答不了两个问题：
+
+- **总 token** = `inputTokens + outputTokens + cacheReadTokens + cacheWriteTokens`。
+  provider 实际处理过的每一个 token。缓存读取属于这里：它们是真实占用上下文窗口、
+  真实计费的 token，只是单价更低。在热缓存的工作负载下它们占绝对多数 —— 实测一次
+  会话里缓存占 **99.6%**，漏掉它们会把当天用量少算 **257 倍**。
+- **计费 token** = `inputTokens + outputTokens`。成本口径的子集：按完整输入价计费的
+  token 加上输出。定价页会拿去相乘的就是这个数。
+
+两个都常驻显示，不需要靠猜去判断某个孤立数字是哪个口径。每日柱状图分三段堆叠 ——
+缓存读取（最底）、输入、输出 —— 所以柱子的高度和卡片里的总量是同一个数。缓存刻意
+画在最底下：它占 99% 时，画在上面会把输入和输出挤出绘图区。
+
+其余数字：
+
 - **缓存命中率** = `cacheReadTokens / (inputTokens + cacheReadTokens)`。分母为 0 时
   显示 `—` 而不是 `0%`：「什么都没发」和「什么都没命中」是两件事。
 - **平均首字延迟** 只对真正产出过首 token 的调用取均值。一个在吐字前就失败的调用
@@ -179,7 +193,7 @@ test/              零依赖测试
 npm test          # 或：node test/run-all.cjs
 ```
 
-7 个文件，177 个断言：
+7 个文件，187 个断言：
 
 | 文件 | 覆盖 |
 |---|---|

@@ -71,6 +71,7 @@ window.__ModuleLoader__.load({
 .tkd_chart{width:100%;height:190px;display:block;overflow:visible}
 .tkd_bar{fill:var(--dsw-alias-state-business-primary)}
 .tkd_barAlt{fill:var(--dsw-alias-state-business-primary);opacity:.45}
+.tkd_barCache{fill:var(--dsw-alias-state-business-primary);opacity:.18}
 .tkd_axis{stroke:var(--dsw-alias-border-l2);stroke-width:1}
 .tkd_tick{fill:var(--dsw-alias-label-caption);font-size:10px}
 .tkd_table{width:100%;border-collapse:collapse;font-size:13px}
@@ -89,6 +90,7 @@ window.__ModuleLoader__.load({
 .tkd_legend{align-items:center;gap:12px;color:var(--dsw-alias-label-tertiary);font-size:12px;display:flex}
 .tkd_swatch{width:10px;height:10px;border-radius:2px;background:var(--dsw-alias-state-business-primary);flex:none;display:inline-block}
 .tkd_swatchAlt{opacity:.45}
+.tkd_swatchCache{opacity:.18}
 .tkd_spin{animation:tkd-spin 1s linear infinite}
 @keyframes tkd-spin{to{transform:rotate(360deg)}}
 @media (prefers-reduced-motion:reduce){.tkd_spin{animation:none}}
@@ -147,6 +149,29 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * The stacked segments of one chart column, bottom to top.
+     *
+     * Cache reads sit at the bottom because they dominate a warm workload —
+     * on a cache-heavy day they are over 99% of the bar. Drawing them last
+     * would push the input and output segments off the top of the plot and
+     * make the one thing the chart is for invisible.
+     * @param column - one bucketed column.
+     * @returns `{ key, className, value }[]` bottom-first.
+     */
+    function columnSegments(column) {
+      return [
+        { key: 'cache', className: 'tkd_barCache', value: column.cacheReadTokens ?? 0 },
+        { key: 'in', className: 'tkd_barAlt', value: column.inputTokens ?? 0 },
+        { key: 'out', className: 'tkd_bar', value: column.outputTokens ?? 0 },
+      ]
+    }
+
+    /** The stacked height of one column, in tokens. */
+    function columnTotal(column) {
+      return (column.cacheReadTokens ?? 0) + (column.inputTokens ?? 0) + (column.outputTokens ?? 0)
+    }
+
+    /**
      * Peak of one day list, used to scale the chart.
      * @param days - derived day rows.
      * @returns the largest stacked total, or 0.
@@ -154,7 +179,7 @@ window.__ModuleLoader__.load({
     function chartPeak(days) {
       let peak = 0
       for (const day of days ?? []) {
-        const total = (day.inputTokens ?? 0) + (day.outputTokens ?? 0)
+        const total = columnTotal(day)
         if (total > peak) peak = total
       }
       return peak
@@ -167,7 +192,7 @@ window.__ModuleLoader__.load({
      * long ranges bucket by week and label the bucket's first day.
      * @param days - derived day rows, ascending.
      * @param maxColumns - widest column count to emit.
-     * @returns `{ label, inputTokens, outputTokens, requests, days }[]`.
+     * @returns `{ label, inputTokens, outputTokens, cacheReadTokens, requests, days }[]`.
      */
     function bucketDays(days, maxColumns = 30) {
       const list = days ?? []
@@ -176,6 +201,7 @@ window.__ModuleLoader__.load({
           label: formatDayShort(day.day),
           inputTokens: day.inputTokens ?? 0,
           outputTokens: day.outputTokens ?? 0,
+          cacheReadTokens: day.cacheReadTokens ?? 0,
           requests: day.requests ?? 0,
           days: 1,
         }))
@@ -186,13 +212,22 @@ window.__ModuleLoader__.load({
         const slice = list.slice(i, i + size)
         let inputTokens = 0
         let outputTokens = 0
+        let cacheReadTokens = 0
         let requests = 0
         for (const day of slice) {
           inputTokens += day.inputTokens ?? 0
           outputTokens += day.outputTokens ?? 0
+          cacheReadTokens += day.cacheReadTokens ?? 0
           requests += day.requests ?? 0
         }
-        out.push({ label: formatDayShort(slice[0].day), inputTokens, outputTokens, requests, days: slice.length })
+        out.push({
+          label: formatDayShort(slice[0].day),
+          inputTokens,
+          outputTokens,
+          cacheReadTokens,
+          requests,
+          days: slice.length,
+        })
       }
       return out
     }
@@ -441,27 +476,24 @@ window.__ModuleLoader__.load({
       const bars = []
       columns.forEach((column, index) => {
         const x = padLeft + slot * index + (slot - barWidth) / 2
-        const total = column.inputTokens + column.outputTokens
+        const total = columnTotal(column)
         const scaled = peak > 0 ? (total / peak) * plotHeight : 0
-        const inputHeight = total > 0 ? (column.inputTokens / total) * scaled : 0
-        const outputHeight = total > 0 ? (column.outputTokens / total) * scaled : 0
         const baseY = 8 + plotHeight
-        bars.push(jsx('rect', {
-          className: 'tkd_barAlt',
-          x,
-          y: baseY - inputHeight,
-          width: barWidth,
-          height: Math.max(0, inputHeight),
-          rx: 2,
-        }, `in-${index}`))
-        bars.push(jsx('rect', {
-          className: 'tkd_bar',
-          x,
-          y: baseY - inputHeight - outputHeight,
-          width: barWidth,
-          height: Math.max(0, outputHeight),
-          rx: 2,
-        }, `out-${index}`))
+        // Stack bottom-up so each segment sits on the one before it.
+        let cursor = baseY
+        for (const segment of columnSegments(column)) {
+          const height = total > 0 ? (segment.value / total) * scaled : 0
+          if (height <= 0) continue
+          cursor -= height
+          bars.push(jsx('rect', {
+            className: segment.className,
+            x,
+            y: cursor,
+            width: barWidth,
+            height: Math.max(0, height),
+            rx: 2,
+          }, `${segment.key}-${index}`))
+        }
       })
 
       const ticks = []
@@ -504,22 +536,18 @@ window.__ModuleLoader__.load({
             'aria-label': t('chart.aria'),
             children: [...ticks, ...bars, ...labels],
           }),
-          jsxs('div', {
+          jsx('div', {
             className: 'tkd_legend',
             children: [
-              jsxs('span', {
-                children: [
-                  jsx('span', { className: 'tkd_swatch', key: 's' }),
-                  jsx('span', { key: 'l', children: ` ${t('chart.output')}` }),
-                ],
-              }),
-              jsxs('span', {
-                children: [
-                  jsx('span', { className: 'tkd_swatch tkd_swatchAlt', key: 's' }),
-                  jsx('span', { key: 'l', children: ` ${t('chart.input')}` }),
-                ],
-              }),
-            ],
+              { key: 'cache', swatch: 'tkd_swatchCache', label: 'chart.cache' },
+              { key: 'in', swatch: 'tkd_swatchAlt', label: 'chart.input' },
+              { key: 'out', swatch: 'tkd_swatch', label: 'chart.output' },
+            ].map((item) => jsxs('span', {
+              children: [
+                jsx('span', { className: `tkd_swatch ${item.swatch}`, key: 's' }),
+                jsx('span', { key: 'l', children: ` ${t(item.label)}` }),
+              ],
+            }, item.key)),
           }),
         ],
       })
@@ -655,12 +683,29 @@ window.__ModuleLoader__.load({
             jsxs('div', {
               className: 'tkd_kpis',
               children: [
-                jsx(Kpi, { label: t('kpi.total'), value: formatTokens(totals.totalTokens), sub: formatInt(totals.totalTokens) }, 'total'),
+                jsx(Kpi, {
+                  label: t('kpi.total'),
+                  value: formatTokens(totals.totalTokens),
+                  sub: formatInt(totals.totalTokens),
+                }, 'total'),
+                jsx(Kpi, {
+                  label: t('kpi.billable'),
+                  value: formatTokens(totals.billableTokens),
+                  sub: t('kpi.billableHint'),
+                }, 'billable'),
                 jsx(Kpi, { label: t('kpi.input'), value: formatTokens(totals.inputTokens) }, 'input'),
                 jsx(Kpi, { label: t('kpi.output'), value: formatTokens(totals.outputTokens) }, 'output'),
-                jsx(Kpi, { label: t('kpi.cacheRead'), value: formatTokens(totals.cacheReadTokens), sub: formatRate(totals.cacheHitRate) }, 'cache'),
+                jsx(Kpi, {
+                  label: t('kpi.cacheRead'),
+                  value: formatTokens(totals.cacheReadTokens),
+                  sub: formatRate(totals.cacheHitRate),
+                }, 'cache'),
                 jsx(Kpi, { label: t('kpi.reasoning'), value: formatTokens(totals.reasoningTokens) }, 'reasoning'),
-                jsx(Kpi, { label: t('kpi.requests'), value: formatInt(totals.requests), sub: totals.errors > 0 ? `${formatInt(totals.errors)} ${t('kpi.errors')}` : undefined }, 'requests'),
+                jsx(Kpi, {
+                  label: t('kpi.requests'),
+                  value: formatInt(totals.requests),
+                  sub: totals.errors > 0 ? `${formatInt(totals.errors)} ${t('kpi.errors')}` : undefined,
+                }, 'requests'),
                 jsx(Kpi, { label: t('kpi.ttft'), value: formatMs(totals.avgTtftMs) }, 'ttft'),
                 jsx(Kpi, { label: t('kpi.avgDuration'), value: formatMs(totals.avgDurationMs) }, 'duration'),
               ],
@@ -787,9 +832,12 @@ window.__ModuleLoader__.load({
       'chart.title': '每日用量',
       'chart.input': '输入',
       'chart.output': '输出',
+      'chart.cache': '缓存读取',
       'chart.empty': '该区间内没有记录。',
-      'chart.aria': '每日 token 用量柱状图',
+      'chart.aria': '每日 token 用量柱状图，自下而上依次为缓存读取、输入、输出',
       'kpi.total': '总 token',
+      'kpi.billable': '计费 token',
+      'kpi.billableHint': '不含缓存',
       'kpi.input': '输入',
       'kpi.output': '输出',
       'kpi.cacheRead': '缓存读取',
@@ -841,9 +889,12 @@ window.__ModuleLoader__.load({
       'chart.title': 'Daily usage',
       'chart.input': 'input',
       'chart.output': 'output',
+      'chart.cache': 'cache read',
       'chart.empty': 'No records in this range.',
-      'chart.aria': 'Daily token usage bar chart',
+      'chart.aria': 'Daily token usage bar chart, bottom to top: cache reads, input, output',
       'kpi.total': 'Total tokens',
+      'kpi.billable': 'Billable tokens',
+      'kpi.billableHint': 'excludes cache',
       'kpi.input': 'Input',
       'kpi.output': 'Output',
       'kpi.cacheRead': 'Cache read',
@@ -943,6 +994,8 @@ window.__ModuleLoader__.load({
       formatClock,
       formatDayShort,
       chartPeak,
+      columnSegments,
+      columnTotal,
       bucketDays,
       zh,
       en,

@@ -127,9 +127,40 @@ async function main() {
 
   group('ledger: derived values')
 
-  test('total tokens are input plus output', () => {
-    const view = X.derive({ ...X.emptyBucket(), inputTokens: 30, outputTokens: 12 })
-    assertEqual(view.totalTokens, 42)
+  test('total tokens include cache reads and writes', () => {
+    const view = X.derive({
+      ...X.emptyBucket(),
+      inputTokens: 30,
+      outputTokens: 12,
+      cacheReadTokens: 900,
+      cacheWriteTokens: 8,
+    })
+    assertEqual(view.totalTokens, 950)
+  })
+
+  test('billable tokens are input plus output, excluding cache', () => {
+    const view = X.derive({
+      ...X.emptyBucket(),
+      inputTokens: 30,
+      outputTokens: 12,
+      cacheReadTokens: 900,
+      cacheWriteTokens: 8,
+    })
+    assertEqual(view.billableTokens, 42)
+  })
+
+  test('a cache-only day still reports its real consumption', () => {
+    // The bug this guards: a warm workload is >99% cache reads, so leaving
+    // them out understated the day by two orders of magnitude.
+    const view = X.derive({ ...X.emptyBucket(), inputTokens: 100, outputTokens: 100, cacheReadTokens: 100_000 })
+    assertEqual(view.totalTokens, 100_200)
+    assertEqual(view.billableTokens, 200)
+  })
+
+  test('total is never less than billable', () => {
+    const view = X.derive({ ...X.emptyBucket(), inputTokens: 5, outputTokens: 5 })
+    assert(view.totalTokens >= view.billableTokens, 'total must include every billable token')
+    assertEqual(view.totalTokens, view.billableTokens)
   })
 
   test('cache hit rate uses input plus cache read as its base', () => {

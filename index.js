@@ -377,21 +377,33 @@ function serializeLedger(state) {
 
 /** Turn one counter set into the derived view the browser renders. */
 function derive(bucket) {
-  const cacheBase = count(bucket.inputTokens) + count(bucket.cacheReadTokens)
+  const input = count(bucket.inputTokens)
+  const output = count(bucket.outputTokens)
+  const cacheRead = count(bucket.cacheReadTokens)
+  const cacheWrite = count(bucket.cacheWriteTokens)
+  const cacheBase = input + cacheRead
   return {
     requests: count(bucket.requests),
     reportedRequests: count(bucket.reportedRequests),
     errors: count(bucket.errors),
-    inputTokens: count(bucket.inputTokens),
-    outputTokens: count(bucket.outputTokens),
-    cacheReadTokens: count(bucket.cacheReadTokens),
-    cacheWriteTokens: count(bucket.cacheWriteTokens),
+    inputTokens: input,
+    outputTokens: output,
+    cacheReadTokens: cacheRead,
+    cacheWriteTokens: cacheWrite,
     reasoningTokens: count(bucket.reasoningTokens),
     durationMs: count(bucket.durationMs),
-    totalTokens: count(bucket.inputTokens) + count(bucket.outputTokens),
+    // Every token the provider actually processed. Cache reads belong here:
+    // they are real tokens that occupied the context window and were billed,
+    // merely at a lower rate. Leaving them out understated consumption by two
+    // orders of magnitude on a cache-heavy workload.
+    totalTokens: input + output + cacheRead + cacheWrite,
+    // The cost-shaped subset: tokens billed at the full input rate plus output.
+    // Kept alongside the total because the two answer different questions, and
+    // a reader should not have to guess which one a lone figure meant.
+    billableTokens: input + output,
     // A rate with a zero denominator is unknown, not zero: `null` keeps the
     // browser from drawing "0% cache hit" for a day that had no input at all.
-    cacheHitRate: cacheBase > 0 ? count(bucket.cacheReadTokens) / cacheBase : null,
+    cacheHitRate: cacheBase > 0 ? cacheRead / cacheBase : null,
     avgTtftMs: count(bucket.ttftCount) > 0 ? Math.round(count(bucket.ttftSumMs) / count(bucket.ttftCount)) : null,
     avgDurationMs: count(bucket.requests) > 0 ? Math.round(count(bucket.durationMs) / count(bucket.requests)) : null,
   }

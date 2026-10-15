@@ -132,21 +132,21 @@ function ready(overrides = {}) {
       data: {
         range: '7d',
         days: [
-          { day: '2026-10-13', inputTokens: 100, outputTokens: 50, requests: 1, totalTokens: 150, cacheHitRate: 0.5, avgTtftMs: 200 },
-          { day: '2026-10-14', inputTokens: 200, outputTokens: 80, requests: 2, totalTokens: 280, cacheHitRate: null, avgTtftMs: null },
+          { day: '2026-10-13', inputTokens: 100, outputTokens: 50, cacheReadTokens: 850, requests: 1, totalTokens: 1000, billableTokens: 150, cacheHitRate: 0.5, avgTtftMs: 200 },
+          { day: '2026-10-14', inputTokens: 200, outputTokens: 80, cacheReadTokens: 1720, requests: 2, totalTokens: 2000, billableTokens: 280, cacheHitRate: null, avgTtftMs: null },
         ],
         totals: {
           requests: 3, reportedRequests: 3, errors: 1,
-          inputTokens: 300, outputTokens: 130, cacheReadTokens: 900,
+          inputTokens: 300, outputTokens: 130, cacheReadTokens: 2570,
           cacheWriteTokens: 0, reasoningTokens: 20, durationMs: 3000,
-          totalTokens: 430, cacheHitRate: 0.75, avgTtftMs: 200, avgDurationMs: 1000,
+          totalTokens: 3000, billableTokens: 430, cacheHitRate: 0.9, avgTtftMs: 200, avgDurationMs: 1000,
         },
         models: [{
-          key: 'p|m', provider: 'p', model: 'm', totalTokens: 430, inputTokens: 300,
-          outputTokens: 130, cacheReadTokens: 900, requests: 3, avgTtftMs: 200,
+          key: 'p|m', provider: 'p', model: 'm', totalTokens: 3000, billableTokens: 430, inputTokens: 300,
+          outputTokens: 130, cacheReadTokens: 2570, requests: 3, avgTtftMs: 200,
         }],
-        purposes: [{ key: 'chat', totalTokens: 430, requests: 3 }],
-        projects: [{ key: 'D:\\p', cwd: 'D:\\p', totalTokens: 430, requests: 3, cacheReadTokens: 900 }],
+        purposes: [{ key: 'chat', totalTokens: 3000, billableTokens: 430, requests: 3 }],
+        projects: [{ key: 'D:\\p', cwd: 'D:\\p', totalTokens: 3000, billableTokens: 430, requests: 3, cacheReadTokens: 2570 }],
         recent: [
           { ts: 1792019631000, provider: 'p', model: 'm', purpose: 'chat', inputTokens: 300, outputTokens: 130, cacheReadTokens: 900, durationMs: 1000, ttftMs: 200, ok: true },
           { ts: 1792019620000, provider: 'p', model: 'm', purpose: 'chat', inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, durationMs: 50, ttftMs: 0, ok: false, error: 'boom' },
@@ -236,8 +236,8 @@ test('a ready page renders every section', () => {
 
 test('the KPI figures are formatted, not raw', () => {
   const html = render(React.createElement(DashboardPage, { source: sourceStub(ready()), t }))
-  assert(html.includes('75.0%'), `cache hit rate missing: ${html}`)
-  assert(html.includes('200 ms'), `latency missing: ${html}`)
+  assert(html.includes('90.0%'), `cache hit rate missing: ${html.slice(0, 700)}`)
+  assert(html.includes('200 ms'), `latency missing: ${html.slice(0, 700)}`)
 })
 
 test('the chart emits bars for the days it was given', () => {
@@ -269,6 +269,37 @@ test('a failed recent call is marked in the table', () => {
 test('a successful recent call is marked as ok', () => {
   const html = render(React.createElement(DashboardPage, { source: sourceStub(ready()), t }))
   assert(html.includes('status.ok'), 'the successful call should be labelled')
+})
+
+test('both token totals are shown, and they are different figures', () => {
+  const html = render(React.createElement(DashboardPage, { source: sourceStub(ready()), t }))
+  // Total consumption (3,000) and the billable subset (430) must both appear,
+  // because a lone "total tokens" is ambiguous about whether cache is included.
+  assert(html.includes('kpi.total'), 'the total card is missing')
+  assert(html.includes('kpi.billable'), 'the billable card is missing')
+  assert(html.includes('>3,000<'), `the true total is missing: ${html.slice(0, 700)}`)
+  assert(html.includes('>430<'), `the billable figure is missing: ${html.slice(0, 700)}`)
+})
+
+test('the chart draws a cache segment below input and output', () => {
+  const html = render(React.createElement(DashboardPage, { source: sourceStub(ready()), t }))
+  assert(html.includes('tkd_barCache'), 'the cache segment is missing from the chart')
+  assert(html.includes('tkd_barAlt'), 'the input segment is missing')
+  assert(html.includes('tkd_bar'), 'the output segment is missing')
+})
+
+test('the chart legend names all three segments', () => {
+  const html = render(React.createElement(DashboardPage, { source: sourceStub(ready()), t }))
+  for (const key of ['chart.cache', 'chart.input', 'chart.output']) {
+    assert(html.includes(key), `legend entry ${key} is missing`)
+  }
+})
+
+test('the chart scales to the cache-inclusive total', () => {
+  // Days of 1,000 and 2,000 total tokens: the axis peak must reflect those,
+  // not the 150/280 billable remainder, or the bars would be drawn 6x too tall.
+  const html = render(React.createElement(DashboardPage, { source: sourceStub(ready()), t }))
+  assert(html.includes('>2,000<'), `expected a cache-inclusive axis peak: ${html.slice(0, 900)}`)
 })
 
 test('the empty state renders when nothing was recorded', () => {

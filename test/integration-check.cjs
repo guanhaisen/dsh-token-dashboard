@@ -148,14 +148,18 @@ async function main() {
     assertEqual(value.totals.requests, 1)
     assertEqual(value.totals.inputTokens, 1000)
     assertEqual(value.totals.outputTokens, 250)
-    assertEqual(value.totals.totalTokens, 1250)
     assertEqual(value.totals.cacheReadTokens, 3000)
+    // 1000 + 250 + 3000: the cache read is real consumption and belongs in the
+    // total, while the billable figure stays input+output.
+    assertEqual(value.totals.totalTokens, 4250)
+    assertEqual(value.totals.billableTokens, 1250)
     assertEqual(value.totals.reasoningTokens, 40)
     assertEqual(value.totals.errors, 0)
     assertEqual(value.recent.length, 1)
     assertEqual(value.recent[0].model, 'deepseek-v4.1-flash')
     assertEqual(value.models.length, 1)
     assertEqual(value.models[0].provider, 'workbuddy')
+    assertEqual(value.models[0].totalTokens, 4250)
     assertEqual(value.purposes[0].key, 'chat')
   })
 
