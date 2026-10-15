@@ -72,6 +72,7 @@ window.__ModuleLoader__.load({
 .tkd_bar{fill:var(--dsw-alias-state-business-primary)}
 .tkd_barAlt{fill:var(--dsw-alias-state-business-primary);opacity:.45}
 .tkd_barCache{fill:var(--dsw-alias-state-business-primary);opacity:.18}
+.tkd_barCacheWrite{fill:var(--dsw-alias-state-business-primary);opacity:.3}
 .tkd_axis{stroke:var(--dsw-alias-border-l2);stroke-width:1}
 .tkd_tick{fill:var(--dsw-alias-label-caption);font-size:10px}
 .tkd_table{width:100%;border-collapse:collapse;font-size:13px}
@@ -91,6 +92,7 @@ window.__ModuleLoader__.load({
 .tkd_swatch{width:10px;height:10px;border-radius:2px;background:var(--dsw-alias-state-business-primary);flex:none;display:inline-block}
 .tkd_swatchAlt{opacity:.45}
 .tkd_swatchCache{opacity:.18}
+.tkd_swatchCacheWrite{opacity:.3}
 .tkd_spin{animation:tkd-spin 1s linear infinite}
 @keyframes tkd-spin{to{transform:rotate(360deg)}}
 @media (prefers-reduced-motion:reduce){.tkd_spin{animation:none}}
@@ -148,6 +150,33 @@ window.__ModuleLoader__.load({
       return typeof day === 'string' && day.length === 10 ? day.slice(5) : String(day ?? '')
     }
 
+    /** Fill `{name}` placeholders in one localized template. */
+    function template(text, values) {
+      return String(text ?? '').replace(/\{(\w+)\}/g, (match, key) => (
+        Object.prototype.hasOwnProperty.call(values, key) ? String(values[key]) : match
+      ))
+    }
+
+    /**
+     * Render a fixed day-boundary offset as a UTC label.
+     *
+     * The offset is configurable (`utcOffsetMinutes`), so the page cannot state
+     * a constant: a hardcoded "UTC+8" caption was wrong for every user who had
+     * changed the setting, and the day the numbers are cut at is exactly what
+     * that caption exists to tell them.
+     * @param minutes - offset in minutes; 480 for UTC+8.
+     * @returns `UTC+8`, `UTC+5:30`, `UTC-5`, `UTC±0`, or `UTC` when unknown.
+     */
+    function formatUtcOffset(minutes) {
+      if (typeof minutes !== 'number' || !Number.isFinite(minutes)) return 'UTC'
+      const total = Math.trunc(minutes)
+      const sign = total > 0 ? '+' : total < 0 ? '-' : '±'
+      const abs = Math.abs(total)
+      const hours = Math.floor(abs / 60)
+      const rest = abs % 60
+      return `UTC${sign}${hours}${rest === 0 ? '' : `:${String(rest).padStart(2, '0')}`}`
+    }
+
     /**
      * The stacked segments of one chart column, bottom to top.
      *
@@ -155,12 +184,18 @@ window.__ModuleLoader__.load({
      * on a cache-heavy day they are over 99% of the bar. Drawing them last
      * would push the input and output segments off the top of the plot and
      * make the one thing the chart is for invisible.
+     *
+     * The four segments sum to exactly the `totalTokens` the KPI card reports,
+     * because the bars are scaled against that same figure: omitting cache
+     * writes here (as an earlier version did) made the bar shorter than the
+     * number printed directly above it on any provider that reports them.
      * @param column - one bucketed column.
      * @returns `{ key, className, value }[]` bottom-first.
      */
     function columnSegments(column) {
       return [
         { key: 'cache', className: 'tkd_barCache', value: column.cacheReadTokens ?? 0 },
+        { key: 'cacheWrite', className: 'tkd_barCacheWrite', value: column.cacheWriteTokens ?? 0 },
         { key: 'in', className: 'tkd_barAlt', value: column.inputTokens ?? 0 },
         { key: 'out', className: 'tkd_bar', value: column.outputTokens ?? 0 },
       ]
@@ -168,7 +203,10 @@ window.__ModuleLoader__.load({
 
     /** The stacked height of one column, in tokens. */
     function columnTotal(column) {
-      return (column.cacheReadTokens ?? 0) + (column.inputTokens ?? 0) + (column.outputTokens ?? 0)
+      return (column.cacheReadTokens ?? 0)
+        + (column.cacheWriteTokens ?? 0)
+        + (column.inputTokens ?? 0)
+        + (column.outputTokens ?? 0)
     }
 
     /**
@@ -192,7 +230,7 @@ window.__ModuleLoader__.load({
      * long ranges bucket by week and label the bucket's first day.
      * @param days - derived day rows, ascending.
      * @param maxColumns - widest column count to emit.
-     * @returns `{ label, inputTokens, outputTokens, cacheReadTokens, requests, days }[]`.
+     * @returns `{ label, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, requests, days }[]`.
      */
     function bucketDays(days, maxColumns = 30) {
       const list = days ?? []
@@ -202,6 +240,7 @@ window.__ModuleLoader__.load({
           inputTokens: day.inputTokens ?? 0,
           outputTokens: day.outputTokens ?? 0,
           cacheReadTokens: day.cacheReadTokens ?? 0,
+          cacheWriteTokens: day.cacheWriteTokens ?? 0,
           requests: day.requests ?? 0,
           days: 1,
         }))
@@ -213,11 +252,13 @@ window.__ModuleLoader__.load({
         let inputTokens = 0
         let outputTokens = 0
         let cacheReadTokens = 0
+        let cacheWriteTokens = 0
         let requests = 0
         for (const day of slice) {
           inputTokens += day.inputTokens ?? 0
           outputTokens += day.outputTokens ?? 0
           cacheReadTokens += day.cacheReadTokens ?? 0
+          cacheWriteTokens += day.cacheWriteTokens ?? 0
           requests += day.requests ?? 0
         }
         out.push({
@@ -225,6 +266,7 @@ window.__ModuleLoader__.load({
           inputTokens,
           outputTokens,
           cacheReadTokens,
+          cacheWriteTokens,
           requests,
           days: slice.length,
         })
@@ -236,20 +278,37 @@ window.__ModuleLoader__.load({
     const DASHBOARD_SERIES = ['days', 'models', 'purposes', 'projects', 'recent']
 
     /**
-     * Whether one payload is the shape the page renders.
+     * Normalize one payload into the shape the page renders, or `null`.
      *
-     * The page indexes these arrays directly, so a payload that lacks them
-     * would throw mid-render and blank the entire shell. Checking once here
-     * turns that into the ordinary "no data" path.
+     * The page indexes the series arrays directly and reads `totals` as a
+     * record, so a payload missing either would throw mid-render and blank the
+     * whole shell. Checking once here turns that into the ordinary "no data"
+     * path — including a missing `totals`, which renders every KPI as an em
+     * dash rather than raising `Cannot read properties of undefined`.
+     * @param value - whatever the endpoint returned.
+     * @returns a renderable payload, or `null` when the shape is wrong.
+     */
+    function normalizeDashboard(value) {
+      if (value === null || typeof value !== 'object') return null
+      for (const key of DASHBOARD_SERIES) {
+        if (!Array.isArray(value[key])) return null
+      }
+      const totals = value.totals
+      const meta = value.meta
+      return {
+        ...value,
+        totals: totals !== null && typeof totals === 'object' && !Array.isArray(totals) ? totals : {},
+        meta: meta !== null && typeof meta === 'object' && !Array.isArray(meta) ? meta : {},
+      }
+    }
+
+    /**
+     * Whether one payload is the shape the page renders.
      * @param value - whatever the endpoint returned.
      * @returns true only for a renderable dashboard payload.
      */
     function isDashboard(value) {
-      if (value === null || typeof value !== 'object') return false
-      for (const key of DASHBOARD_SERIES) {
-        if (!Array.isArray(value[key])) return false
-      }
-      return true
+      return normalizeDashboard(value) !== null
     }
 
     // ── shared data source ───────────────────────────────────────────────────
@@ -317,8 +376,14 @@ window.__ModuleLoader__.load({
         today: { status: 'idle', data: null, error: '' },
         page: { status: 'idle', range: '7d', data: null, error: '' },
       }
-      let todayInFlight = false
-      let pageInFlight = false
+      // One monotonically increasing generation per slot. A boolean "in flight"
+      // flag could only drop a request: with the page polling every 30s, a range
+      // click that landed while a poll was open was silently discarded, so the
+      // control snapped back and the click appeared to do nothing. A generation
+      // lets a newer request supersede an older one instead, and lets the older
+      // one's late response be recognised as stale.
+      let todayGeneration = 0
+      let pageGeneration = 0
       let disposed = false
 
       const publish = (next) => {
@@ -329,17 +394,42 @@ window.__ModuleLoader__.load({
 
       const fail = (error) => (error instanceof Error ? error.message : String(error))
 
-      /** Fetch one slot through the shared caller. */
-      async function fetchInto(slot, range, signal) {
+      /**
+       * Whether one thrown value is a deliberate abort rather than a failure.
+       *
+       * A fetch abort surfaces as a `DOMException` in the browser and an `Error`
+       * in Node — and `DOMException` is not an `Error` subclass everywhere — so
+       * this reads the name off whatever was thrown rather than testing the
+       * prototype chain.
+       */
+      const isAbort = (error) => error !== null && typeof error === 'object' && error.name === 'AbortError'
+
+      /**
+       * Fetch one slot through the shared caller.
+       *
+       * The response is applied only while its generation is still the newest
+       * for that slot, so a slow earlier request can never overwrite the result
+       * of the one that superseded it.
+       * @param slot - `today` or `page`.
+       * @param range - range to request.
+       * @param generation - the generation this request belongs to.
+       * @param signal - abort signal from the caller.
+       */
+      async function fetchInto(slot, range, generation, signal) {
+        const current = () => (slot === 'today' ? todayGeneration : pageGeneration) === generation
         if (!rpc.available) {
-          publish({ ...snapshot, [slot]: { ...snapshot[slot], status: 'unavailable', error: 'no-connection' } })
+          if (current()) publish({ ...snapshot, [slot]: { ...snapshot[slot], status: 'unavailable', error: 'no-connection' } })
           return
         }
         publish({ ...snapshot, [slot]: { ...snapshot[slot], status: 'loading', error: '' } })
         try {
           const data = await rpc.call('dashboard', { range }, signal)
-          publish({ ...snapshot, [slot]: { ...snapshot[slot], status: 'ready', data, error: '' } })
+          if (current()) publish({ ...snapshot, [slot]: { ...snapshot[slot], status: 'ready', data, error: '' } })
         } catch (error) {
+          // An abort is the caller's own doing (unmount, or a superseding
+          // navigation), not a failure of the endpoint: surfacing it would draw
+          // a red error box for a request nobody is waiting for any more.
+          if (isAbort(error) || !current()) return
           publish({ ...snapshot, [slot]: { ...snapshot[slot], status: 'error', error: fail(error) } })
         }
       }
@@ -350,26 +440,21 @@ window.__ModuleLoader__.load({
           listeners.add(listener)
           return () => listeners.delete(listener)
         },
-        /** Refresh the foot row's today figure, coalescing concurrent calls. */
+        /** Refresh the foot row's today figure, superseding any older read. */
         async loadToday(signal) {
-          if (todayInFlight) return
-          todayInFlight = true
-          try {
-            await fetchInto('today', 'today', signal)
-          } finally {
-            todayInFlight = false
-          }
+          const generation = (todayGeneration += 1)
+          await fetchInto('today', 'today', generation, signal)
         },
-        /** Refresh the page at one range. */
+        /**
+         * Refresh the page at one range.
+         *
+         * The requested range is published before the read so the control
+         * reflects the click immediately, and the newest call wins.
+         */
         async loadPage(range, signal) {
-          if (pageInFlight) return
-          pageInFlight = true
-          try {
-            publish({ ...snapshot, page: { ...snapshot.page, range } })
-            await fetchInto('page', range, signal)
-          } finally {
-            pageInFlight = false
-          }
+          const generation = (pageGeneration += 1)
+          publish({ ...snapshot, page: { ...snapshot.page, range } })
+          await fetchInto('page', range, generation, signal)
         },
         dispose() {
           disposed = true
@@ -540,6 +625,7 @@ window.__ModuleLoader__.load({
             className: 'tkd_legend',
             children: [
               { key: 'cache', swatch: 'tkd_swatchCache', label: 'chart.cache' },
+              { key: 'cacheWrite', swatch: 'tkd_swatchCacheWrite', label: 'chart.cacheWrite' },
               { key: 'in', swatch: 'tkd_swatchAlt', label: 'chart.input' },
               { key: 'out', swatch: 'tkd_swatch', label: 'chart.output' },
             ].map((item) => jsxs('span', {
@@ -620,8 +706,11 @@ window.__ModuleLoader__.load({
 
       // A payload that is not the shape this page renders is treated as no
       // payload at all: an unexpected response must degrade to a message, not
-      // throw out of render and blank the whole shell.
-      const data = isDashboard(page.data) ? page.data : null
+      // throw out of render and blank the whole shell. Normalizing (rather than
+      // only testing) also supplies the `totals`/`meta` records the KPI cards
+      // read, so a payload that carries the series but no totals renders em
+      // dashes instead of throwing on `totals.totalTokens`.
+      const data = normalizeDashboard(page.data)
       const meta = data?.meta
       const totals = data?.totals
 
@@ -660,6 +749,10 @@ window.__ModuleLoader__.load({
                 className: 'tkd_ghost',
                 onClick: onRefresh,
                 disabled: page.status === 'loading',
+                // The button is icon-only, so without these it has no
+                // accessible name at all and announces as just "button".
+                title: t('page.refresh'),
+                'aria-label': t('page.refresh'),
                 children: jsx(primitives.IconRefreshOutlineRegular, { size: 14 }),
               }),
             ],
@@ -800,7 +893,10 @@ window.__ModuleLoader__.load({
                       ],
                     }),
                   }),
-                jsx('p', { className: 'tkd_note', children: t('page.footnote') }),
+                jsx('p', {
+                  className: 'tkd_note',
+                  children: template(t('page.footnote'), { zone: formatUtcOffset(meta?.utcOffsetMinutes) }),
+                }),
               ],
             }),
           ],
@@ -823,7 +919,8 @@ window.__ModuleLoader__.load({
       'page.subtitle': '本插件自安装后开始记录',
       'page.since': '起始',
       'page.updated': '更新于',
-      'page.footnote': '按 UTC+8 计日；输入与输出分别统计，缓存命中单列，不折算价格。',
+      'page.refresh': '刷新',
+      'page.footnote': '按 {zone} 计日；输入与输出分别统计，缓存命中与缓存写入单列，不折算价格。',
       'range.label': '统计区间',
       'range.today': '今日',
       'range.7d': '近 7 天',
@@ -833,8 +930,9 @@ window.__ModuleLoader__.load({
       'chart.input': '输入',
       'chart.output': '输出',
       'chart.cache': '缓存读取',
+      'chart.cacheWrite': '缓存写入',
       'chart.empty': '该区间内没有记录。',
-      'chart.aria': '每日 token 用量柱状图，自下而上依次为缓存读取、输入、输出',
+      'chart.aria': '每日 token 用量柱状图，自下而上依次为缓存读取、缓存写入、输入、输出',
       'kpi.total': '总 token',
       'kpi.nonCached': '非缓存 token',
       'kpi.nonCachedHint': '未命中缓存的输入 + 输出',
@@ -880,7 +978,8 @@ window.__ModuleLoader__.load({
       'page.subtitle': 'Recorded since this plugin was installed',
       'page.since': 'since',
       'page.updated': 'updated',
-      'page.footnote': 'Days are cut at UTC+8. Input and output are counted separately and cache hits are listed on their own; no price is applied.',
+      'page.refresh': 'Refresh',
+      'page.footnote': 'Days are cut at {zone}. Input and output are counted separately and cache reads and writes are listed on their own; no price is applied.',
       'range.label': 'Range',
       'range.today': 'Today',
       'range.7d': 'Last 7 days',
@@ -890,8 +989,9 @@ window.__ModuleLoader__.load({
       'chart.input': 'input',
       'chart.output': 'output',
       'chart.cache': 'cache read',
+      'chart.cacheWrite': 'cache write',
       'chart.empty': 'No records in this range.',
-      'chart.aria': 'Daily token usage bar chart, bottom to top: cache reads, input, output',
+      'chart.aria': 'Daily token usage bar chart, bottom to top: cache reads, cache writes, input, output',
       'kpi.total': 'Total tokens',
       'kpi.nonCached': 'Non-cached tokens',
       'kpi.nonCachedHint': 'uncached input + output',
@@ -993,6 +1093,10 @@ window.__ModuleLoader__.load({
       formatMs,
       formatClock,
       formatDayShort,
+      formatUtcOffset,
+      template,
+      normalizeDashboard,
+      isDashboard,
       chartPeak,
       columnSegments,
       columnTotal,

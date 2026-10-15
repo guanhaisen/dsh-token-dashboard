@@ -380,7 +380,96 @@ async function main() {
     assertEqual(store.read().state.days['2026-10-14'], undefined)
   })
 
-  process.exit(report('store-check'))
+  group('store: a failed write keeps its data')
+
+  /** The fake io above, with the write path failing while `failing` is true. */
+  function failingIo() {
+    const io = fakeIo()
+    let failing = true
+    const realWrite = io.writeFileSync
+    io.writeFileSync = (path, text) => {
+      if (failing) throw new Error('EACCES: disk is read-only')
+      realWrite(path, text)
+    }
+    return {
+      io,
+      heal: () => {
+        failing = false
+      },
+    }
+  }
+
+  test('a failed flush reports failure and stays dirty', () => {
+    const { io } = failingIo()
+    const { store } = makeStore(X, io)
+    store.append(record())
+    assertEqual(store.flush(), false)
+    assertEqual(io.files.size, 0)
+  })
+
+  test('dispose retries a write that failed, so the records survive', () => {
+    // Regression: `flush` cleared the dirty flag before attempting the write and
+    // never restored it, so `dispose` — which only flushes when dirty — skipped
+    // the write entirely and every record since the last success was lost.
+    const { io, heal } = failingIo()
+    const { store, runTimers } = makeStore(X, io)
+    store.append(record())
+    runTimers()
+    assertEqual(io.files.size, 0, 'the debounced flush should have failed')
+    heal()
+    store.dispose()
+    assertEqual(io.files.size, 1, 'dispose must retry the unpersisted delta')
+    const { state } = X.parseLedger(io.files.get('/state/token-dashboard/ledger.json'))
+    assertEqual(state.days['2026-10-14'].requests, 1)
+  })
+
+  test('records added after a failed write are not lost either', () => {
+    const { io, heal } = failingIo()
+    const { store, runTimers } = makeStore(X, io)
+    store.append(record())
+    runTimers()
+    store.append(record({ ts: Date.UTC(2026, 9, 14, 6, 0, 1) }))
+    heal()
+    store.dispose()
+    const { state } = X.parseLedger(io.files.get('/state/token-dashboard/ledger.json'))
+    assertEqual(state.days['2026-10-14'].requests, 2)
+    assertEqual(state.recent.length, 2)
+  })
+
+  test('a successful flush after a failure stops being dirty', () => {
+    const { io, heal } = failingIo()
+    const { store } = makeStore(X, io)
+    store.append(record())
+    assertEqual(store.flush(), false)
+    heal()
+    assertEqual(store.flush(), true)
+    // A second dispose must not rewrite what is already on disk.
+    const before = io.files.get('/state/token-dashboard/ledger.json')
+    store.dispose()
+    assertEqual(io.files.get('/state/token-dashboard/ledger.json'), before)
+  })
+
+  test('a flush that fails does not double-count once it succeeds', () => {
+    const { io, heal } = failingIo()
+    const { store } = makeStore(X, io)
+    store.append(record())
+    store.flush()
+    heal()
+    store.flush()
+    store.flush()
+    const { state } = X.parseLedger(io.files.get('/state/token-dashboard/ledger.json'))
+    assertEqual(state.days['2026-10-14'].requests, 1)
+  })
+
+  test('a read through a failed write still reports the pending delta', () => {
+    const { io } = failingIo()
+    const { store } = makeStore(X, io)
+    store.append(record())
+    store.flush()
+    assertEqual(store.read().state.days['2026-10-14'].requests, 1)
+  })
+
+  process.exit(await report('store-check'))
 }
 
 main().catch((error) => {

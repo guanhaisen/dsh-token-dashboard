@@ -237,7 +237,7 @@ async function main() {
     assert(!Object.prototype.hasOwnProperty.call(record, 'cwd'), 'cwd should be omitted')
   })
 
-  process.exit(report('recorder-check'))
+  process.exit(await report('recorder-check'))
 }
 
 main().catch((error) => {

@@ -342,7 +342,94 @@ async function main() {
     assertEqual(state.days[day].outputTokens, 25)
   })
 
-  process.exit(report('integration-check'))
+  group('integration: a bad configuration cannot destroy the ledger')
+
+  test('an existing ledger survives a null retention setting', async () => {
+    // The whole path end to end: record a day, unload, remount with a
+    // retention the plugin cannot use, record nothing, unload again. Before the
+    // fix, `count(null)` was 0, the cutoff became tomorrow, and this flush
+    // deleted the day that the first mount had written.
+    const home = tempHome()
+    const first = makeCtx(home)
+    mod.apply(first.ctx, mod.DEFAULTS)
+    await callModel(first.listeners.find((l) => l.event === 'llm/stream').listener, { provider: 'p', model: 'm' }, [
+      { type: 'usage', usage: { inputTokens: 100, outputTokens: 20 } },
+      { type: 'finish', reason: { kind: 'stop' } },
+    ])
+    for (const dispose of first.disposers) dispose()
+
+    const ledgerPath = path.join(home, 'token-dashboard', 'ledger.json')
+    const before = mod.__internal.parseLedger(fs.readFileSync(ledgerPath, 'utf-8')).state
+    const recordedDay = Object.keys(before.days)[0]
+
+    const second = makeCtx(home)
+    mod.apply(second.ctx, { ...mod.DEFAULTS, retentionDays: null, recentLimit: undefined })
+    await callModel(second.listeners.find((l) => l.event === 'llm/stream').listener, { provider: 'p', model: 'm' }, [
+      { type: 'usage', usage: { inputTokens: 7, outputTokens: 3 } },
+      { type: 'finish', reason: { kind: 'stop' } },
+    ])
+    for (const dispose of second.disposers) dispose()
+
+    const after = mod.__internal.parseLedger(fs.readFileSync(ledgerPath, 'utf-8')).state
+    assert(after.days[recordedDay] !== undefined, `day ${recordedDay} was deleted by a bad retention setting`)
+    assertEqual(after.days[recordedDay].inputTokens, 107)
+    // `recentLimit: undefined` used to cap the detail list at zero.
+    assertEqual(after.recent.length, 2)
+  })
+
+  test('the route rejects an aborted request instead of answering it', async () => {
+    const home = tempHome()
+    const { ctx, routes } = makeCtx(home)
+    mod.apply(ctx, mod.DEFAULTS)
+    const controller = new AbortController()
+    controller.abort()
+    const request = new Request('http://localhost/api/token-dashboard', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        type: 'client-request',
+        rpcId: 'rpc-abort',
+        method: 'token-dashboard',
+        payload: { method: 'dashboard', payload: { range: '7d' } },
+      }),
+      signal: controller.signal,
+    })
+    const envelope = await (await routes[0].fetch(request)).json()
+    assertEqual(envelope.result.ok, false)
+    assertEqual(envelope.result.error.code, 'token-dashboard/aborted')
+  })
+
+  test('the route answers normally with a live signal', async () => {
+    const home = tempHome()
+    const { ctx, listeners, routes } = makeCtx(home)
+    mod.apply(ctx, mod.DEFAULTS)
+    await callModel(listeners.find((l) => l.event === 'llm/stream').listener, { provider: 'p', model: 'm' }, [
+      { type: 'usage', usage: { inputTokens: 3, outputTokens: 2 } },
+      { type: 'finish', reason: { kind: 'stop' } },
+    ])
+    const result = await query(routes[0], 'today')
+    assertEqual(result.ok, true)
+    assertEqual(result.value.totals.totalTokens, 5)
+  })
+
+  group('integration: the recent table matches the requested range')
+
+  test('a range with no recorded day returns no recent rows', async () => {
+    const home = tempHome()
+    const { ctx, listeners, routes } = makeCtx(home)
+    mod.apply(ctx, mod.DEFAULTS)
+    await callModel(listeners.find((l) => l.event === 'llm/stream').listener, { provider: 'p', model: 'm' }, [
+      { type: 'usage', usage: { inputTokens: 9, outputTokens: 1 } },
+      { type: 'finish', reason: { kind: 'stop' } },
+    ])
+    // The call above lands on today, so today has rows and yesterday does not.
+    const today = await query(routes[0], 'today')
+    assertEqual(today.value.recent.length, 1)
+    const all = await query(routes[0], 'all')
+    assertEqual(all.value.recent.length, 1)
+  })
+
+  process.exit(await report('integration-check'))
 }
 
 main().catch((error) => {

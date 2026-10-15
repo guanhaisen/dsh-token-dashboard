@@ -2,6 +2,7 @@
 'use strict'
 
 const results = []
+const pending = []
 
 function group(name) {
   currentGroup = name
@@ -9,31 +10,45 @@ function group(name) {
 
 let currentGroup = 'ungrouped'
 
+/**
+ * Register one test and record whether it passed.
+ *
+ * The body may be synchronous or asynchronous: a returned promise is tracked so
+ * `report` waits for it. This matters — an earlier version called `fn()` and
+ * recorded success the moment the promise was created, so every async body's
+ * post-`await` assertions were still queued when `process.exit(report(…))`
+ * fired and never actually ran. Half the suite was passing vacuously.
+ */
 function test(name, fn) {
+  const result = { group: currentGroup, name, ok: true }
+  results.push(result)
+  let returned
   try {
-    fn()
-    results.push({ group: currentGroup, name, ok: true })
+    returned = fn()
   } catch (error) {
-    results.push({
-      group: currentGroup,
-      name,
-      ok: false,
-      message: error && error.message ? error.message : String(error),
-    })
+    result.ok = false
+    result.message = error && error.message ? error.message : String(error)
+    return
+  }
+  if (returned !== null && typeof returned === 'object' && typeof returned.then === 'function') {
+    pending.push(returned.then(
+      () => {},
+      (error) => {
+        result.ok = false
+        result.message = error && error.message ? error.message : String(error)
+      },
+    ))
   }
 }
 
 async function testAsync(name, fn) {
+  const result = { group: currentGroup, name, ok: true }
+  results.push(result)
   try {
     await fn()
-    results.push({ group: currentGroup, name, ok: true })
   } catch (error) {
-    results.push({
-      group: currentGroup,
-      name,
-      ok: false,
-      message: error && error.message ? error.message : String(error),
-    })
+    result.ok = false
+    result.message = error && error.message ? error.message : String(error)
   }
 }
 
@@ -63,8 +78,14 @@ async function assertThrows(fn, message) {
   if (!threw) throw new Error(message || 'expected a throw')
 }
 
-/** Print the collected results and return the process exit code. */
-function report(label) {
+/**
+ * Wait for every registered test to settle, then print and return the exit code.
+ *
+ * Resolved asynchronously so the caller can `await report(…)` and only then
+ * `process.exit`. Without this, async tests would be abandoned mid-flight.
+ */
+async function report(label) {
+  if (pending.length > 0) await Promise.all(pending)
   const failed = results.filter((r) => !r.ok)
   const byGroup = new Map()
   for (const result of results) {

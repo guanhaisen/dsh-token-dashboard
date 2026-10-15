@@ -244,7 +244,7 @@ async function main() {
     assertEqual(value.meta.recordedDays, 1)
   })
 
-  process.exit(report('route-check'))
+  process.exit(await report('route-check'))
 }
 
 main().catch((error) => {

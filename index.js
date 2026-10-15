@@ -79,9 +79,58 @@ const SUB_MAPS = Object.freeze(['models', 'purposes', 'projects'])
 /** One day in milliseconds. */
 const DAY_MS = 86_400_000
 
+/** Hard bounds on the numeric settings, so no value can defeat the ledger. */
+const LIMITS = Object.freeze({
+  retentionDays: { min: 1, max: 36_500 },
+  recentLimit: { min: 0, max: 10_000 },
+  utcOffsetMinutes: { min: -720, max: 840 },
+  flushDebounceMs: { min: 0, max: 60_000 },
+})
+
 // ─── pure helpers ──────────────────────────────────────────────────────────
 // Everything below this marker is deterministic and free of I/O, so the test
 // suite drives it directly through the `__internal` seam at the end of file.
+
+/**
+ * Resolve the plugin configuration into a complete, safe setting set.
+ *
+ * Every rejection is reported through `warn` so a typo in the patch row is
+ * visible instead of silently changing what the dashboard means.
+ * @param config - raw plugin configuration, possibly partial or malformed.
+ * @param warn - optional `(message) => void` sink for rejected keys.
+ * @returns the resolved settings.
+ */
+function resolveSettings(config, warn) {
+  const source = config === null || typeof config !== 'object' || Array.isArray(config) ? {} : config
+  const settings = { ...DEFAULTS }
+  // A logger that throws must not stop the plugin from mounting, so the sink is
+  // contained here rather than trusted from every call site.
+  const report = (message) => {
+    try {
+      warn?.(message)
+    } catch {
+      /* diagnostics are best-effort */
+    }
+  }
+  for (const [key, bounds] of Object.entries(LIMITS)) {
+    const raw = source[key]
+    if (raw === undefined) continue
+    const usable = typeof raw === 'number' && Number.isFinite(raw) && raw >= bounds.min && raw <= bounds.max
+    if (usable) {
+      settings[key] = Math.trunc(raw)
+    } else {
+      report(`[token-dashboard] ${key}=${JSON.stringify(raw)} is not a number in ${bounds.min}..${bounds.max}; using ${DEFAULTS[key]}`)
+    }
+  }
+  if (source.trackProjects !== undefined) {
+    if (typeof source.trackProjects === 'boolean') {
+      settings.trackProjects = source.trackProjects
+    } else {
+      report(`[token-dashboard] trackProjects=${JSON.stringify(source.trackProjects)} is not a boolean; using ${DEFAULTS.trackProjects}`)
+    }
+  }
+  return settings
+}
 
 /** Coerce one wire value to a non-negative finite number. */
 function count(value) {
@@ -474,7 +523,16 @@ function buildDashboard(state, options) {
   })
   const purposes = subRows(dayList, 'purposes')
   const projects = subRows(dayList, 'projects').map((row) => ({ ...row, cwd: row.key }))
-  const cutoff = selected.length === 0 ? 0 : Date.parse(`${selected[0]}T00:00:00Z`) - utcOffsetMinutes * 60_000
+  // The detail list is filtered by day-key membership rather than by a
+  // timestamp cutoff. A cutoff derived from `selected[0]` collapsed to 0
+  // whenever the range selected no day at all, which let yesterday's calls
+  // render under a "Today" filter next to all-zero KPIs — the table disagreed
+  // with the cards and the chart. Membership in the selected day set cannot
+  // disagree with them, because it IS that set.
+  const selectedKeys = new Set(selected)
+  const recent = state.recent
+    .filter((record) => selectedKeys.has(record.day || dayKey(record.ts, utcOffsetMinutes)))
+    .slice(0, count(recentLimit))
   return {
     range,
     days,
@@ -482,7 +540,7 @@ function buildDashboard(state, options) {
     models,
     purposes,
     projects,
-    recent: state.recent.filter((record) => record.ts >= cutoff).slice(0, count(recentLimit)),
+    recent,
     meta: {
       firstDay: allDays.length > 0 ? allDays[0] : null,
       lastDay: allDays.length > 0 ? allDays[allDays.length - 1] : null,
@@ -575,7 +633,6 @@ function createLedgerStore(options) {
       clearTimeoutImpl(timer)
       timer = undefined
     }
-    dirty = false
     const delta = bucketDelta(state.days, written)
     const disk = readDisk()
     applyDelta(disk.days, delta)
@@ -585,7 +642,15 @@ function createLedgerStore(options) {
       recent: mergeRecent([state.recent, disk.recent], recentLimit),
     }
     pruneDays(merged.days, now(), retentionDays, utcOffsetMinutes)
-    if (!writeDisk(merged)) return false
+    if (!writeDisk(merged)) {
+      // The write failed, so this process's delta is still unpersisted. Staying
+      // dirty is what makes `dispose()` retry it: clearing the flag here (as an
+      // earlier version did) made the unload flush a no-op and silently dropped
+      // every record accumulated since the last successful write.
+      dirty = true
+      return false
+    }
+    dirty = false
     state.updatedAt = merged.updatedAt
     state.recent = merged.recent
     written = JSON.parse(JSON.stringify(state.days))
@@ -746,8 +811,15 @@ function reply(rpcId, result) {
  * @param method - method name from the envelope.
  * @param payload - method payload.
  * @param context - `{ store, config }`.
+ * @param signal - the request's abort signal.
  */
-async function handleMethod(method, payload, context) {
+async function handleMethod(method, payload, context, signal) {
+  // A browser that navigated away is not waiting for this answer. Reporting it
+  // as an ordinary result (rather than throwing) keeps it out of the failure
+  // path, so an abandoned poll neither logs a warning nor looks like a fault.
+  if (signal?.aborted) {
+    return { ok: false, error: { code: 'token-dashboard/aborted', message: 'Request was aborted.' } }
+  }
   if (method !== 'dashboard') {
     return { ok: false, error: { code: 'token-dashboard/unknown-method', message: `Unknown method "${String(method)}".` } }
   }
@@ -799,7 +871,7 @@ function createRoute(context) {
       return reply(rpcId, { ok: false, error: { code: 'token-dashboard/bad-request', message: 'Invalid Token Dashboard request.' } })
     }
     try {
-      return reply(rpcId, await handleMethod(call.method, call.payload, context))
+      return reply(rpcId, await handleMethod(call.method, call.payload, context, request.signal))
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error)
       context.logger?.warn?.(`[token-dashboard] ${String(call.method)} failed: ${detail}`)
@@ -836,8 +908,8 @@ function resolveStateDir(ctx) {
  * @param config - plugin configuration.
  */
 function apply(ctx, config) {
-  const settings = { ...DEFAULTS, ...(config ?? {}) }
   const logger = ctx.logger
+  const settings = resolveSettings(config, (message) => logger?.warn?.(message))
 
   const stateDir = resolveStateDir(ctx)
   const ledgerPath = join(stateDir, STATE_DIR_NAME, LEDGER_FILE_NAME)
@@ -926,9 +998,11 @@ export const __internal = {
   createRoute,
   handleMethod,
   reply,
+  resolveSettings,
   SCHEMA,
   VERSION,
   DEFAULTS,
+  LIMITS,
   BUCKET_FIELDS,
   SUB_MAPS,
 }

@@ -120,10 +120,12 @@ Aggregated by **day** (boundary at UTC+8 by default), **model**, **purpose** and
   to `dsh-our-free-model`: it covers only the adapters that plugin wraps, and it
   is pruned on a 90-day window. The two ledgers are independent, and neither
   affects the other.
-- **Every field is recorded exactly as the provider reported it.** Cache hits stay
-  in their own counter rather than being folded into `inputTokens`, and nothing is
-  normalized or guessed — the two totals the dashboard shows are arithmetic on the
-  reported numbers, not an interpretation of them.
+- **Every field is recorded exactly as the provider reported it.** Cache reads and
+  cache writes stay in their own counters rather than being folded into
+  `inputTokens`, and nothing is normalized or guessed — the two totals the
+  dashboard shows are arithmetic on the reported numbers, not an interpretation
+  of them. The chart's stack uses those same four counters, so a bar and the card
+  above it can never disagree.
 - **No price conversion.** There is no reliable per-route price source available
   to the plugin, so the dashboard reports tokens, not money. A cost figure built
   on a guessed rate would be worse than no figure.
@@ -152,9 +154,10 @@ quantity `uncachedInputTokens` internally. That is why `inputTokens` alone is mu
 smaller than the cache figure on a warm session.
 
 Both totals are always on screen, so neither has to be inferred. The daily chart
-stacks three segments — cache reads (bottom), input, then output — so the bar's
-height is the same total the card reports. Cache is drawn lowest deliberately: at
-99% of the bar it would otherwise push input and output off the top of the plot.
+stacks four segments — cache reads (bottom), cache writes, input, then output —
+so the bar's height is the same total the card reports. Cache is drawn lowest
+deliberately: at 99% of the bar it would otherwise push input and output off the
+top of the plot.
 
 Other figures:
 
@@ -167,8 +170,14 @@ Other figures:
 - **A call that reported no usage** is still counted as a request (and as an
   error if it failed), but contributes no tokens — so a failing route cannot
   quietly dilute your averages toward zero.
+- **The recent-calls table lists exactly the day range you selected.** Nothing
+  outside the range is shown, so the table can never disagree with the cards and
+  the chart above it — including when the range is empty, which shows an empty
+  table rather than the last thing that happened to be recorded.
 - The chart buckets by week once a range is long enough that one bar per day
-  would be a hairline. The bucket's label is its first day.
+  would be a hairline. The bucket's label is its first day. Only days that have
+  records are drawn, so the axis is a sequence of recorded days rather than a
+  strictly linear calendar.
 
 ## Data file
 
@@ -182,6 +191,10 @@ Other figures:
 - **Atomic writes** (`ledger.json.tmp` → `rename`), debounced by 2 seconds, with
   a synchronous flush when the plugin unloads — so the last calls before a quit
   are not lost to the debounce window.
+- **A failed write is retried, not forgotten.** If the write throws (a read-only
+  disk, a full volume), the pending delta stays marked dirty and the unload flush
+  attempts it again; the records are kept in memory rather than dropped on the
+  floor.
 - **Safe across processes.** Every flush re-reads the current file and folds in
   only the delta since this process last wrote. Two profiles (say `desktop` and
   `headless`) writing the same ledger therefore add to each other's counts
@@ -203,6 +216,20 @@ Edit the row in `cordis.patch.yml` (or override it from your profile's
 | `utcOffsetMinutes` | `480` | Fixed day-boundary offset; `480` = UTC+8 |
 | `trackProjects` | `true` | Record the `cwd` dimension |
 | `flushDebounceMs` | `2000` | Debounce before a dirty ledger reaches disk |
+
+**A value that cannot be used is rejected, not clamped.** Each numeric field must
+be a finite number in a sane range (`retentionDays` 1–36500, `recentLimit`
+0–10000, `utcOffsetMinutes` ±720/840, `flushDebounceMs` 0–60000) and
+`trackProjects` must be a real boolean; anything else falls back to the default
+and logs one warning naming the key. This matters more than it sounds: a
+`retentionDays` of `null` or a typo like `"730"` used to be coerced to `0`, which
+made the retention cutoff *tomorrow* and deleted every recorded day on the next
+flush. A configuration typo must not be able to destroy your history, so an
+unusable value is ignored rather than reinterpreted.
+
+The day boundary also drives what the page says: the dashboard's footnote names
+the offset actually in use (`UTC+8`, `UTC±0`, `UTC+5:30`, …) rather than assuming
+the default.
 
 ## Known limitations
 
@@ -236,20 +263,26 @@ test/              Zero-dependency test suite
 npm test          # or: node test/run-all.cjs
 ```
 
-188 assertions across seven files:
+244 assertions across seven files:
 
 | File | Covers |
 |---|---|
-| `ledger-check.cjs` | UTC+8 day boundary (one millisecond either side of midnight), bucket accumulation and clamping, derived figures, delta merging, retention, defensive parsing, payload assembly |
-| `store-check.cjs` | Debounced flush, atomic write, **reading the whole day back after a restart**, repeated reads not accumulating, **interleaved flushes from two stores losing no counts**, retention trimming, detail dedup and cap, write-failure and throwing-logger containment |
+| `ledger-check.cjs` | UTC+8 day boundary (one millisecond either side of midnight), bucket accumulation and clamping, derived figures, delta merging, retention, defensive parsing, payload assembly, **the recent table agreeing with the selected range**, **configuration values that cannot be used** |
+| `store-check.cjs` | Debounced flush, atomic write, **reading the whole day back after a restart**, repeated reads not accumulating, **interleaved flushes from two stores losing no counts**, retention trimming, detail dedup and cap, write-failure and throwing-logger containment, **a failed write being retried on unload instead of dropping its delta** |
 | `recorder-check.cjs` | Chunks pass through unchanged (same object identity), laziness, exactly one record per call, errors rethrown unchanged, consumer abandonment, a throwing sink never reaching the model lane |
 | `route-check.cjs` | 405 / 415 / 400, envelope validation, rpcId echo, unknown method, a throwing store not escaping, all four ranges, the empty ledger |
-| `client-check.cjs` | Bundle load under a stub facade, slot registration and ordering, no-connection degradation, the source state machine, formatting, chart bucketing, matching zh/en key sets |
-| `integration-check.cjs` | The real `apply()` end to end: one model call → ledger → read back through the route; cwd and purpose dimensions; a failed call counted as an error; flush on unload and continued counts on a second mount |
-| `render-check.cjs` | Every branch of both components rendered: wide and rail states, loading/error/no-connection/empty states, chart geometry and zero-height bars, missing `meta`/`totals` not crashing |
+| `client-check.cjs` | Bundle load under a stub facade, slot registration and ordering, no-connection degradation, the source state machine, **a range switch superseding an in-flight read and aborting without an error state**, formatting, chart bucketing, **cache-write parity between bar and card**, payload normalization, matching zh/en key sets |
+| `integration-check.cjs` | The real `apply()` end to end: one model call → ledger → read back through the route; cwd and purpose dimensions; a failed call counted as an error; flush on unload and continued counts on a second mount; **an existing ledger surviving a bad retention setting**; an aborted request |
+| `render-check.cjs` | Every branch of both components rendered: wide and rail states, loading/error/no-connection/empty states, chart geometry and zero-height bars, **a bar reaching the card's total with cache writes present**, **a payload with no `totals` at all**, missing `meta`/`totals` not crashing, accessible names, the footnote's zone |
 
 Every test seam is exported from the Host half as `__internal` and exercised
 directly.
+
+The harness itself awaits every test: an async body's promise is tracked and
+`report` waits for it before exiting. That is load-bearing — an earlier version
+recorded "ok" the instant an async test's promise was created, so the assertions
+after the first `await` were still queued when `process.exit` fired and never
+ran. The async half of the suite was passing vacuously.
 
 ## License
 

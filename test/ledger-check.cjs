@@ -399,7 +399,205 @@ async function main() {
     assertEqual(payload.recent[0].day, '2026-10-14')
   })
 
-  process.exit(report('ledger-check'))
+  group('ledger: recent agrees with the selected range')
+
+  /** One state whose only day is `day`, carrying one recent row per given day. */
+  function stateWith(day, recentDays) {
+    const state = X.emptyState()
+    state.days[day] = { ...X.emptyBucket(), requests: 1, reportedRequests: 1, inputTokens: 10 }
+    state.recent = recentDays.map((recentDay) => ({
+      ts: Date.parse(`${recentDay}T02:00:00Z`),
+      day: recentDay,
+      provider: 'p',
+      model: 'm',
+      usageReported: true,
+      ok: true,
+    }))
+    return state
+  }
+
+  test('today with nothing recorded today shows no recent rows', () => {
+    // Regression: `selected` was empty, so the cutoff collapsed to 0 and
+    // yesterday's calls rendered under a "Today" filter beside all-zero KPIs.
+    const payload = X.buildDashboard(stateWith('2026-10-14', ['2026-10-14']), {
+      range: 'today',
+      now: Date.UTC(2026, 9, 15, 6, 0, 0),
+      utcOffsetMinutes: UTC8,
+      recentLimit: 10,
+    })
+    assertEqual(payload.days.length, 0)
+    assertEqual(payload.totals.totalTokens, 0)
+    assertEqual(payload.recent, [])
+  })
+
+  test('7d after a long idle period shows no recent rows either', () => {
+    const payload = X.buildDashboard(stateWith('2026-08-01', ['2026-08-01']), {
+      range: '7d',
+      now: Date.UTC(2026, 9, 15, 6, 0, 0),
+      utcOffsetMinutes: UTC8,
+      recentLimit: 10,
+    })
+    assertEqual(payload.days.length, 0)
+    assertEqual(payload.recent, [])
+  })
+
+  test('30d still keeps a record inside its window', () => {
+    const payload = X.buildDashboard(stateWith('2026-10-01', ['2026-10-01']), {
+      range: '30d',
+      now: Date.UTC(2026, 9, 15, 6, 0, 0),
+      utcOffsetMinutes: UTC8,
+      recentLimit: 10,
+    })
+    assertEqual(payload.days.length, 1)
+    assertEqual(payload.recent.length, 1)
+  })
+
+  test('the recent table never disagrees with the day list', () => {
+    const state = stateWith('2026-10-14', ['2026-10-01', '2026-10-14', '2026-08-01'])
+    state.days['2026-10-01'] = { ...X.emptyBucket(), requests: 1, reportedRequests: 1 }
+    state.days['2026-08-01'] = { ...X.emptyBucket(), requests: 1, reportedRequests: 1 }
+    for (const range of ['today', '7d', '30d', 'all']) {
+      const payload = X.buildDashboard(state, {
+        range,
+        now: Date.UTC(2026, 9, 15, 6, 0, 0),
+        utcOffsetMinutes: UTC8,
+        recentLimit: 10,
+      })
+      const selected = new Set(payload.days.map((row) => row.day))
+      for (const record of payload.recent) {
+        assert(selected.has(record.day), `${range}: recent row ${record.day} is outside the selected days`)
+      }
+      for (const recentDay of ['2026-10-01', '2026-10-14', '2026-08-01']) {
+        const shown = payload.recent.some((record) => record.day === recentDay)
+        assertEqual(shown, selected.has(recentDay), `${range}: visibility of ${recentDay}`)
+      }
+    }
+  })
+
+  test('a record with an empty day falls back to its timestamp', () => {
+    const state = stateWith('2026-10-14', ['2026-10-14'])
+    state.recent[0].day = ''
+    const payload = X.buildDashboard(state, {
+      range: 'today',
+      now: Date.UTC(2026, 9, 14, 6, 0, 0),
+      utcOffsetMinutes: UTC8,
+      recentLimit: 10,
+    })
+    assertEqual(payload.recent.length, 1)
+  })
+
+  test('the recent cap still applies inside a matching range', () => {
+    const state = stateWith('2026-10-14', ['2026-10-14', '2026-10-14', '2026-10-14'])
+    state.recent.forEach((record, index) => {
+      record.ts += index
+    })
+    const payload = X.buildDashboard(state, {
+      range: 'today',
+      now: Date.UTC(2026, 9, 14, 6, 0, 0),
+      utcOffsetMinutes: UTC8,
+      recentLimit: 2,
+    })
+    assertEqual(payload.recent.length, 2)
+  })
+
+  group('ledger: configuration is validated, never trusted')
+
+  test('the defaults survive an absent or empty configuration', () => {
+    assertEqual(X.resolveSettings(undefined), X.DEFAULTS)
+    assertEqual(X.resolveSettings(null), X.DEFAULTS)
+    assertEqual(X.resolveSettings({}), X.DEFAULTS)
+  })
+
+  test('a non-numeric retention falls back instead of deleting everything', () => {
+    // Regression: `count(null)` is 0, so `pruneDays` computed a cutoff of
+    // `now - (0 - 1) * DAY_MS` — tomorrow — and removed every recorded day.
+    for (const bad of [null, undefined, 'abc', '', true, [], {}, Number.NaN, Infinity]) {
+      const settings = X.resolveSettings({ retentionDays: bad })
+      assertEqual(settings.retentionDays, X.DEFAULTS.retentionDays, `retentionDays=${JSON.stringify(bad)}`)
+      const days = { '2026-10-15': X.emptyBucket(), '2026-10-14': X.emptyBucket() }
+      assertEqual(X.pruneDays(days, Date.UTC(2026, 9, 15), settings.retentionDays, UTC8), 0)
+      assertEqual(Object.keys(days).length, 2)
+    }
+  })
+
+  test('an out-of-range retention falls back rather than clamping', () => {
+    assertEqual(X.resolveSettings({ retentionDays: 0 }).retentionDays, X.DEFAULTS.retentionDays)
+    assertEqual(X.resolveSettings({ retentionDays: -1 }).retentionDays, X.DEFAULTS.retentionDays)
+    assertEqual(X.resolveSettings({ retentionDays: 1e9 }).retentionDays, X.DEFAULTS.retentionDays)
+  })
+
+  test('a valid retention is honored, including at the boundary', () => {
+    assertEqual(X.resolveSettings({ retentionDays: 1 }).retentionDays, 1)
+    assertEqual(X.resolveSettings({ retentionDays: 365 }).retentionDays, 365)
+    assertEqual(X.resolveSettings({ retentionDays: 36_500 }).retentionDays, 36_500)
+  })
+
+  test('a non-numeric recent limit falls back instead of emptying the list', () => {
+    // Regression: `mergeRecent`'s `slice(0, count(undefined))` is `slice(0, 0)`,
+    // which wiped every stored detail record on the following flush.
+    for (const bad of [null, undefined, 'abc', Number.NaN]) {
+      assertEqual(X.resolveSettings({ recentLimit: bad }).recentLimit, X.DEFAULTS.recentLimit)
+    }
+    assertEqual(X.resolveSettings({ recentLimit: 0 }).recentLimit, 0)
+    assertEqual(X.resolveSettings({ recentLimit: 50 }).recentLimit, 50)
+    assertEqual(X.resolveSettings({ recentLimit: 1e9 }).recentLimit, X.DEFAULTS.recentLimit)
+  })
+
+  test('a fractional setting is truncated, not rejected', () => {
+    assertEqual(X.resolveSettings({ retentionDays: 30.9 }).retentionDays, 30)
+    assertEqual(X.resolveSettings({ flushDebounceMs: 1999.7 }).flushDebounceMs, 1999)
+  })
+
+  test('an out-of-range UTC offset falls back', () => {
+    assertEqual(X.resolveSettings({ utcOffsetMinutes: 1e6 }).utcOffsetMinutes, X.DEFAULTS.utcOffsetMinutes)
+    assertEqual(X.resolveSettings({ utcOffsetMinutes: -9000 }).utcOffsetMinutes, X.DEFAULTS.utcOffsetMinutes)
+    assertEqual(X.resolveSettings({ utcOffsetMinutes: 0 }).utcOffsetMinutes, 0)
+    assertEqual(X.resolveSettings({ utcOffsetMinutes: -720 }).utcOffsetMinutes, -720)
+  })
+
+  test('a non-boolean trackProjects falls back', () => {
+    for (const bad of ['yes', 1, 0, null, {}]) {
+      assertEqual(X.resolveSettings({ trackProjects: bad }).trackProjects, X.DEFAULTS.trackProjects)
+    }
+    assertEqual(X.resolveSettings({ trackProjects: false }).trackProjects, false)
+  })
+
+  test('a non-object configuration is ignored rather than throwing', () => {
+    for (const bad of ['nope', 42, [], true]) {
+      assertEqual(X.resolveSettings(bad), X.DEFAULTS)
+    }
+  })
+
+  test('every rejection is reported to the warning sink', () => {
+    const warnings = []
+    X.resolveSettings({ retentionDays: null, recentLimit: 'x', trackProjects: 'yes' }, (m) => warnings.push(m))
+    assertEqual(warnings.length, 3)
+    for (const key of ['retentionDays', 'recentLimit', 'trackProjects']) {
+      assert(warnings.some((message) => message.includes(key)), `no warning named ${key}`)
+    }
+  })
+
+  test('an accepted value produces no warning', () => {
+    const warnings = []
+    X.resolveSettings({ retentionDays: 30, recentLimit: 10, trackProjects: false }, (m) => warnings.push(m))
+    assertEqual(warnings, [])
+  })
+
+  test('an unknown key is ignored without a warning', () => {
+    const warnings = []
+    const settings = X.resolveSettings({ nonsense: true }, (m) => warnings.push(m))
+    assertEqual(warnings, [])
+    assertEqual(settings, X.DEFAULTS)
+  })
+
+  test('a throwing warning sink cannot break configuration', () => {
+    const settings = X.resolveSettings({ retentionDays: null }, () => {
+      throw new Error('sink exploded')
+    })
+    assertEqual(settings.retentionDays, X.DEFAULTS.retentionDays)
+  })
+
+  process.exit(await report('ledger-check'))
 }
 
 main().catch((error) => {

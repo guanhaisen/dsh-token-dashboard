@@ -14,7 +14,7 @@
 'use strict'
 
 const path = require('node:path')
-const { group, test, assert, assertEqual, report } = require('./harness.cjs')
+const { group, test, assert, assertEqual, assertClose, report } = require('./harness.cjs')
 
 /** Minimal React surface: the components only call these. */
 const React = {
@@ -109,6 +109,18 @@ function render(element) {
 
 /** A translator that echoes its keys, as the stub locale does. */
 const t = (key) => key
+
+/**
+ * A translator backed by the real English dictionary.
+ *
+ * Needed wherever the assertion is about the *text* rather than about which key
+ * was requested: the echo translator returns the key itself, so a placeholder
+ * like `{zone}` would never be substituted and could not be checked.
+ */
+function realT(key) {
+  const text = exports_.__internal.en[key]
+  return text === undefined ? key : text
+}
 
 /** A source stub in a chosen state. */
 function sourceStub(state) {
@@ -306,11 +318,75 @@ test('the chart draws a cache segment below input and output', () => {
   assert(html.includes('tkd_bar'), 'the output segment is missing')
 })
 
-test('the chart legend names all three segments', () => {
+test('the chart legend names all four segments', () => {
   const html = render(React.createElement(DashboardPage, { source: sourceStub(ready()), t }))
-  for (const key of ['chart.cache', 'chart.input', 'chart.output']) {
+  for (const key of ['chart.cache', 'chart.cacheWrite', 'chart.input', 'chart.output']) {
     assert(html.includes(key), `legend entry ${key} is missing`)
   }
+})
+
+test('the chart draws a cache-write segment', () => {
+  const state = ready()
+  state.page.data.days = [{
+    day: '2026-10-14', inputTokens: 10, outputTokens: 5,
+    cacheReadTokens: 100, cacheWriteTokens: 40, requests: 1, totalTokens: 155,
+  }]
+  const html = render(React.createElement(DashboardPage, { source: sourceStub(state), t }))
+  assert(html.includes('tkd_barCacheWrite'), 'the cache-write segment is missing')
+})
+
+test('a zero cache-write day omits the segment rather than drawing nothing', () => {
+  const state = ready()
+  state.page.data.days = [{
+    day: '2026-10-14', inputTokens: 10, outputTokens: 5,
+    cacheReadTokens: 100, cacheWriteTokens: 0, requests: 1, totalTokens: 115,
+  }]
+  const html = render(React.createElement(DashboardPage, { source: sourceStub(state), t }))
+  assert(!html.includes('tkd_barCacheWrite'), 'a zero-width segment should not be emitted')
+})
+
+/** Every `height="..."` in the markup, in document order. */
+function barHeights(html) {
+  return [...html.matchAll(/height="([\d.]+)"/g)].map((match) => Number(match[1]))
+}
+
+test('a day with cache writes fills the plot exactly, matching the KPI total', () => {
+  // Regression: the bar stacked only cache-read + input + output while the KPI
+  // card totalled cache-read + cache-write + input + output, so the bar was
+  // drawn short by exactly the cache-write share on any provider reporting it.
+  // A single peak day must therefore stack to the full plot height (160), which
+  // is only reachable when every segment the total counts is also drawn.
+  const day = {
+    day: '2026-10-14',
+    inputTokens: 100, outputTokens: 50,
+    cacheReadTokens: 850, cacheWriteTokens: 400,
+    requests: 1, totalTokens: 1_400, nonCachedTokens: 150,
+    cacheHitRate: 0.9, avgTtftMs: 200,
+  }
+  const state = ready()
+  state.page.data.days = [day]
+  state.page.data.totals = { ...state.page.data.totals, ...day }
+  const html = render(React.createElement(DashboardPage, { source: sourceStub(state), t }))
+  const heights = barHeights(html)
+  assertEqual(heights.length, 4, 'expected one rect per segment')
+  const stacked = heights.reduce((sum, height) => sum + height, 0)
+  assertClose(stacked, 160, 0.5, 'the stacked bar must fill the plot for a peak day')
+  // And the card above it shows that same figure.
+  assert(html.includes('>1,400<'), `the KPI total should match the bar: ${html.slice(0, 900)}`)
+})
+
+test('a day without cache writes still stacks to the full plot', () => {
+  const day = {
+    day: '2026-10-14',
+    inputTokens: 100, outputTokens: 50, cacheReadTokens: 850, cacheWriteTokens: 0,
+    requests: 1, totalTokens: 1_000, nonCachedTokens: 150,
+  }
+  const state = ready()
+  state.page.data.days = [day]
+  state.page.data.totals = { ...state.page.data.totals, ...day }
+  const html = render(React.createElement(DashboardPage, { source: sourceStub(state), t }))
+  const stacked = barHeights(html).reduce((sum, height) => sum + height, 0)
+  assertClose(stacked, 160, 0.5, 'a zero cache-write day must still fill the plot')
 })
 
 test('the chart scales to the cache-inclusive total', () => {
@@ -318,6 +394,80 @@ test('the chart scales to the cache-inclusive total', () => {
   // not the 150/280 billable remainder, or the bars would be drawn 6x too tall.
   const html = render(React.createElement(DashboardPage, { source: sourceStub(ready()), t }))
   assert(html.includes('>2,000<'), `expected a cache-inclusive axis peak: ${html.slice(0, 900)}`)
+})
+
+test('the legend swatches are distinct from one another', () => {
+  const state = ready()
+  state.page.data.days = [{ day: '2026-10-14', inputTokens: 1, outputTokens: 1, cacheReadTokens: 1, cacheWriteTokens: 1, totalTokens: 4 }]
+  const html = render(React.createElement(DashboardPage, { source: sourceStub(state), t }))
+  for (const className of ['tkd_swatchCache', 'tkd_swatchCacheWrite', 'tkd_swatchAlt', 'tkd_swatch']) {
+    assert(html.includes(className), `legend swatch ${className} is missing`)
+  }
+})
+
+test('the refresh control carries an accessible name', () => {
+  // The button is icon-only, so without these it announces as just "button".
+  const html = render(React.createElement(DashboardPage, { source: sourceStub(ready()), t }))
+  assert(html.includes('aria-label="page.refresh"'), `no accessible name on the refresh button: ${html.slice(0, 1200)}`)
+  assert(html.includes('title="page.refresh"'), 'no tooltip on the refresh button')
+})
+
+test('the footnote names the configured day boundary, not a hardcoded one', () => {
+  // A literal "UTC+8" was wrong for every deployment that changed the setting.
+  // The echo translator would hide that (it returns the key, and the key holds
+  // the placeholder), so this uses the real dictionary text.
+  const state = ready()
+  state.page.data.meta = { ...state.page.data.meta, utcOffsetMinutes: -300 }
+  const html = render(React.createElement(DashboardPage, { source: sourceStub(state), t: realT }))
+  assert(html.includes('UTC-5'), `expected the configured zone in the footnote: ${html.slice(-700)}`)
+  assert(!html.includes('UTC+8'), 'the footnote still states a hardcoded zone')
+})
+
+test('the footnote renders a half-hour offset correctly', () => {
+  const state = ready()
+  state.page.data.meta = { ...state.page.data.meta, utcOffsetMinutes: 330 }
+  const html = render(React.createElement(DashboardPage, { source: sourceStub(state), t: realT }))
+  assert(html.includes('UTC+5:30'), `expected a half-hour zone: ${html.slice(-700)}`)
+})
+
+test('the footnote with no metadata still renders without a placeholder', () => {
+  const state = ready()
+  delete state.page.data.meta
+  const html = render(React.createElement(DashboardPage, { source: sourceStub(state), t: realT }))
+  assert(!html.includes('{zone}'), 'an unsubstituted placeholder leaked into the page')
+  assert(html.includes('UTC'), 'the footnote should still name a day boundary')
+})
+
+test('a payload with no totals block renders em dashes instead of throwing', () => {
+  // Regression: the shape check accepted a payload carrying the series but no
+  // `totals`, and the page then dereferenced `totals.totalTokens` unguarded —
+  // throwing out of render and blanking the shell, which is exactly what the
+  // check was written to prevent. Omitting the key entirely (rather than
+  // passing `{}`) is the case the old test missed.
+  const state = ready()
+  delete state.page.data.totals
+  let html
+  let threw
+  try {
+    html = render(React.createElement(DashboardPage, { source: sourceStub(state), t }))
+  } catch (error) {
+    threw = error
+  }
+  assert(threw === undefined, `omitting totals threw: ${threw && threw.message}`)
+  assert(html.includes('page.title'), 'the page must still render its header')
+  assert(html.includes('—'), 'every absent figure should render as an em dash')
+})
+
+test('a payload whose totals is null renders em dashes instead of throwing', () => {
+  const state = ready()
+  state.page.data.totals = null
+  let threw
+  try {
+    render(React.createElement(DashboardPage, { source: sourceStub(state), t }))
+  } catch (error) {
+    threw = error
+  }
+  assert(threw === undefined, `a null totals threw: ${threw && threw.message}`)
 })
 
 test('the empty state renders when nothing was recorded', () => {
@@ -444,4 +594,9 @@ test('a non-numeric today total renders no figure rather than NaN', () => {
   assert(html.includes('foot.trigger'), html)
 })
 
-process.exit(report('render-check'))
+;(async () => {
+  process.exit(await report('render-check'))
+})().catch((error) => {
+  console.error('render-check crashed:', error)
+  process.exit(1)
+})
