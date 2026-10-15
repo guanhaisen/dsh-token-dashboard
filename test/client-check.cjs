@@ -490,7 +490,7 @@ test('every key the page needs exists in both dictionaries', () => {
   const required = [
     'foot.trigger', 'page.title', 'range.today', 'range.7d', 'range.30d', 'range.all',
     'chart.title', 'chart.input', 'chart.output', 'chart.cache', 'chart.empty', 'chart.aria',
-    'kpi.total', 'kpi.billable', 'kpi.billableHint', 'kpi.input', 'kpi.output',
+    'kpi.total', 'kpi.nonCached', 'kpi.nonCachedHint', 'kpi.input', 'kpi.output',
     'kpi.cacheRead', 'kpi.reasoning', 'kpi.requests', 'kpi.ttft', 'kpi.avgDuration',
     'table.models', 'table.projects', 'table.purposes', 'table.recent', 'table.empty',
     'col.model', 'col.provider', 'col.total', 'col.input', 'col.output', 'col.cacheRead',

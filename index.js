@@ -397,10 +397,12 @@ function derive(bucket) {
     // merely at a lower rate. Leaving them out understated consumption by two
     // orders of magnitude on a cache-heavy workload.
     totalTokens: input + output + cacheRead + cacheWrite,
-    // The cost-shaped subset: tokens billed at the full input rate plus output.
-    // Kept alongside the total because the two answer different questions, and
-    // a reader should not have to guess which one a lone figure meant.
-    billableTokens: input + output,
+    // The part of the work that did not come from the prompt cache: the
+    // uncached input plus the output. DSH names the provider's `inputTokens`
+    // field `uncachedInputTokens` for exactly this reason, so this is not a
+    // billing figure — cache reads are billed too. It is a composition figure,
+    // and it is named after what it contains rather than what it might cost.
+    nonCachedTokens: input + output,
     // A rate with a zero denominator is unknown, not zero: `null` keeps the
     // browser from drawing "0% cache hit" for a day that had no input at all.
     cacheHitRate: cacheBase > 0 ? cacheRead / cacheBase : null,

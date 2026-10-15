@@ -138,7 +138,9 @@ async function main() {
     assertEqual(view.totalTokens, 950)
   })
 
-  test('billable tokens are input plus output, excluding cache', () => {
+  test('non-cached tokens are input plus output, excluding cache', () => {
+    // Deliberately NOT called a billing figure: cache reads are billed too,
+    // just at a lower rate. This is a composition figure.
     const view = X.derive({
       ...X.emptyBucket(),
       inputTokens: 30,
@@ -146,21 +148,21 @@ async function main() {
       cacheReadTokens: 900,
       cacheWriteTokens: 8,
     })
-    assertEqual(view.billableTokens, 42)
+    assertEqual(view.nonCachedTokens, 42)
   })
 
-  test('a cache-only day still reports its real consumption', () => {
+  test('a cache-heavy day reports both its real consumption and its non-cached part', () => {
     // The bug this guards: a warm workload is >99% cache reads, so leaving
     // them out understated the day by two orders of magnitude.
     const view = X.derive({ ...X.emptyBucket(), inputTokens: 100, outputTokens: 100, cacheReadTokens: 100_000 })
     assertEqual(view.totalTokens, 100_200)
-    assertEqual(view.billableTokens, 200)
+    assertEqual(view.nonCachedTokens, 200)
   })
 
-  test('total is never less than billable', () => {
+  test('total is never less than the non-cached part', () => {
     const view = X.derive({ ...X.emptyBucket(), inputTokens: 5, outputTokens: 5 })
-    assert(view.totalTokens >= view.billableTokens, 'total must include every billable token')
-    assertEqual(view.totalTokens, view.billableTokens)
+    assert(view.totalTokens >= view.nonCachedTokens, 'the total includes every non-cached token')
+    assertEqual(view.totalTokens, view.nonCachedTokens)
   })
 
   test('cache hit rate uses input plus cache read as its base', () => {

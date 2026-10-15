@@ -137,14 +137,24 @@ Two totals are shown, because one number cannot answer both questions:
   real tokens that occupied the context window and were billed, merely at a lower
   rate. On a warm workload they dominate — a measured session was 99.6% cache
   reads, so leaving them out would have understated the day by **257×**.
-- **Billable tokens** = `inputTokens + outputTokens`. The cost-shaped subset:
-  tokens billed at the full input rate, plus output. This is the figure a pricing
-  page would multiply out.
+- **Non-cached tokens** = `inputTokens + outputTokens`. The part of the work that
+  missed the prompt cache: uncached input plus output.
 
-Both are always on screen, so neither has to be inferred. The daily chart stacks
-three segments — cache reads (bottom), input, then output — so the bar's height
-is the same total the card reports. Cache is drawn lowest deliberately: at 99% of
-the bar it would otherwise push input and output off the top of the plot.
+> **This is not a billing figure, and it is deliberately not labelled as one.**
+> Cache reads are billed too — usually at roughly a tenth of the uncached input
+> rate, but billed. Calling `input + output` the "billable" total (an earlier
+> version of this plugin did) tells the reader that cached tokens were free,
+> which is false. The plugin does no price conversion, so it reports composition,
+> never cost.
+
+Note that the provider's `inputTokens` means *uncached* input: DSH names the same
+quantity `uncachedInputTokens` internally. That is why `inputTokens` alone is much
+smaller than the cache figure on a warm session.
+
+Both totals are always on screen, so neither has to be inferred. The daily chart
+stacks three segments — cache reads (bottom), input, then output — so the bar's
+height is the same total the card reports. Cache is drawn lowest deliberately: at
+99% of the bar it would otherwise push input and output off the top of the plot.
 
 Other figures:
 
@@ -226,7 +236,7 @@ test/              Zero-dependency test suite
 npm test          # or: node test/run-all.cjs
 ```
 
-187 assertions across seven files:
+188 assertions across seven files:
 
 | File | Covers |
 |---|---|

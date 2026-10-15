@@ -150,9 +150,9 @@ async function main() {
     assertEqual(value.totals.outputTokens, 250)
     assertEqual(value.totals.cacheReadTokens, 3000)
     // 1000 + 250 + 3000: the cache read is real consumption and belongs in the
-    // total, while the billable figure stays input+output.
+    // total, while the non-cached figure stays input+output.
     assertEqual(value.totals.totalTokens, 4250)
-    assertEqual(value.totals.billableTokens, 1250)
+    assertEqual(value.totals.nonCachedTokens, 1250)
     assertEqual(value.totals.reasoningTokens, 40)
     assertEqual(value.totals.errors, 0)
     assertEqual(value.recent.length, 1)

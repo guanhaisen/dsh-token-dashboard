@@ -132,21 +132,21 @@ function ready(overrides = {}) {
       data: {
         range: '7d',
         days: [
-          { day: '2026-10-13', inputTokens: 100, outputTokens: 50, cacheReadTokens: 850, requests: 1, totalTokens: 1000, billableTokens: 150, cacheHitRate: 0.5, avgTtftMs: 200 },
-          { day: '2026-10-14', inputTokens: 200, outputTokens: 80, cacheReadTokens: 1720, requests: 2, totalTokens: 2000, billableTokens: 280, cacheHitRate: null, avgTtftMs: null },
+          { day: '2026-10-13', inputTokens: 100, outputTokens: 50, cacheReadTokens: 850, requests: 1, totalTokens: 1000, nonCachedTokens: 150, cacheHitRate: 0.5, avgTtftMs: 200 },
+          { day: '2026-10-14', inputTokens: 200, outputTokens: 80, cacheReadTokens: 1720, requests: 2, totalTokens: 2000, nonCachedTokens: 280, cacheHitRate: null, avgTtftMs: null },
         ],
         totals: {
           requests: 3, reportedRequests: 3, errors: 1,
           inputTokens: 300, outputTokens: 130, cacheReadTokens: 2570,
           cacheWriteTokens: 0, reasoningTokens: 20, durationMs: 3000,
-          totalTokens: 3000, billableTokens: 430, cacheHitRate: 0.9, avgTtftMs: 200, avgDurationMs: 1000,
+          totalTokens: 3000, nonCachedTokens: 430, cacheHitRate: 0.9, avgTtftMs: 200, avgDurationMs: 1000,
         },
         models: [{
-          key: 'p|m', provider: 'p', model: 'm', totalTokens: 3000, billableTokens: 430, inputTokens: 300,
+          key: 'p|m', provider: 'p', model: 'm', totalTokens: 3000, nonCachedTokens: 430, inputTokens: 300,
           outputTokens: 130, cacheReadTokens: 2570, requests: 3, avgTtftMs: 200,
         }],
-        purposes: [{ key: 'chat', totalTokens: 3000, billableTokens: 430, requests: 3 }],
-        projects: [{ key: 'D:\\p', cwd: 'D:\\p', totalTokens: 3000, billableTokens: 430, requests: 3, cacheReadTokens: 2570 }],
+        purposes: [{ key: 'chat', totalTokens: 3000, nonCachedTokens: 430, requests: 3 }],
+        projects: [{ key: 'D:\\p', cwd: 'D:\\p', totalTokens: 3000, nonCachedTokens: 430, requests: 3, cacheReadTokens: 2570 }],
         recent: [
           { ts: 1792019631000, provider: 'p', model: 'm', purpose: 'chat', inputTokens: 300, outputTokens: 130, cacheReadTokens: 900, durationMs: 1000, ttftMs: 200, ok: true },
           { ts: 1792019620000, provider: 'p', model: 'm', purpose: 'chat', inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, durationMs: 50, ttftMs: 0, ok: false, error: 'boom' },
@@ -271,14 +271,32 @@ test('a successful recent call is marked as ok', () => {
   assert(html.includes('status.ok'), 'the successful call should be labelled')
 })
 
-test('both token totals are shown, and they are different figures', () => {
+test('the total and the non-cached figure are both shown, and differ', () => {
   const html = render(React.createElement(DashboardPage, { source: sourceStub(ready()), t }))
-  // Total consumption (3,000) and the billable subset (430) must both appear,
-  // because a lone "total tokens" is ambiguous about whether cache is included.
+  // Total consumption (3,000) and the non-cached part (430) must both appear:
+  // a lone "total tokens" is ambiguous about whether cache is included, and the
+  // non-cached figure must not be labelled as a billing figure, because cache
+  // reads are billed too.
   assert(html.includes('kpi.total'), 'the total card is missing')
-  assert(html.includes('kpi.billable'), 'the billable card is missing')
+  assert(html.includes('kpi.nonCached'), 'the non-cached card is missing')
+  assert(!html.includes('kpi.billable'), 'the misleading billable label is still rendered')
   assert(html.includes('>3,000<'), `the true total is missing: ${html.slice(0, 700)}`)
-  assert(html.includes('>430<'), `the billable figure is missing: ${html.slice(0, 700)}`)
+  assert(html.includes('>430<'), `the non-cached figure is missing: ${html.slice(0, 700)}`)
+})
+
+test('no card claims to be a billing total', () => {
+  // Cache reads are billed too, just at a lower rate, so a card that excludes
+  // them must never be labelled as the billable or cost figure.
+  const { zh, en } = exports_.__internal
+  for (const [locale, dict] of [['zh', zh], ['en', en]]) {
+    const labels = Object.entries(dict).filter(([key]) => key.startsWith('kpi.'))
+    for (const [key, text] of labels) {
+      const lower = String(text).toLowerCase()
+      assert(!lower.includes('billable'), `${locale} ${key} still says "billable"`)
+      assert(!lower.includes('计费'), `${locale} ${key} still says 计费`)
+      assert(!lower.includes('cost'), `${locale} ${key} implies a cost figure`)
+    }
+  }
 })
 
 test('the chart draws a cache segment below input and output', () => {
