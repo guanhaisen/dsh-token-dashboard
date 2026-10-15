@@ -641,6 +641,124 @@ test('a bucketed column reports how many days it covers', () => {
   assert(columns[0].days >= 2, 'expected a multi-day bucket')
 })
 
+group('client: axis ticks')
+
+test('the axis step rounds up to a nice number', () => {
+  const { niceStep } = bundle.exports.__internal
+  assertEqual(niceStep(35_340_000), 50_000_000)
+  assertEqual(niceStep(12_500), 20_000)
+  assertEqual(niceStep(1), 1)
+  assertEqual(niceStep(0.4), 0.5)
+  assertEqual(niceStep(0), 0)
+  assertEqual(niceStep(-1), 0)
+})
+
+test('the axis top covers the peak on round numbers', () => {
+  // The whole point of the helper: gridlines land on values a reader can hold
+  // in their head, instead of 35.34M / 70.68M / 106.02M / 141.37M.
+  const { axisScale } = bundle.exports.__internal
+  assertEqual(axisScale(141_370_000), { max: 200_000_000, step: 50_000_000 })
+  assertEqual(axisScale(2_000), { max: 2_000, step: 500 })
+  assertEqual(axisScale(0), { max: 0, step: 0 })
+})
+
+test('every tick of a real peak is a round label', () => {
+  const { axisScale, formatAxisTick } = bundle.exports.__internal
+  const { max, step } = axisScale(141_370_000)
+  const ticks = [0, 1, 2, 3, 4].map((i) => formatAxisTick(step * i, step))
+  assertEqual(ticks, ['0', '50M', '100M', '150M', '200M'])
+  assertEqual(max, 200_000_000)
+})
+
+test('a fractional step keeps exactly the decimals it needs', () => {
+  const f = bundle.exports.__internal.formatAxisTick
+  assertEqual(f(2_500_000, 2_500_000), '2.5M')
+  assertEqual(f(5_000_000, 2_500_000), '5.0M')
+})
+
+test('a sub-thousand axis is grouped raw tokens', () => {
+  const f = bundle.exports.__internal.formatAxisTick
+  assertEqual(f(1_000, 250), '1,000')
+  assertEqual(f(250, 250), '250')
+})
+
+test('the axis baseline is a bare zero', () => {
+  const f = bundle.exports.__internal.formatAxisTick
+  assertEqual(f(0, 50_000_000), '0')
+  assertEqual(f(0, 500), '0')
+})
+
+test('a non-numeric tick is an em dash, never NaN', () => {
+  const f = bundle.exports.__internal.formatAxisTick
+  assertEqual(f(Number.NaN, 1e6), '—')
+  assertEqual(f(undefined, 1e6), '—')
+})
+
+group('client: stylesheet contract')
+
+test('the stylesheet carries the layered KPI grids and the two-column card row', () => {
+  const { CSS } = bundle.exports.__internal
+  for (const rule of ['.tkd_kpiPrimaryRow', '.tkd_kpiSecondaryRow', '.tkd_grid2', '.tkd_chartBox']) {
+    assert(CSS.includes(rule), `the stylesheet is missing ${rule}`)
+  }
+  assert(!CSS.includes('tkd_kpis{grid-template-columns:repeat(auto-fit,minmax(150px,1fr))'),
+    'the ragged auto-fit KPI grid is still in the stylesheet')
+})
+
+test('cards follow the settings-page surface, not a bare outline', () => {
+  const { CSS } = bundle.exports.__internal
+  assert(CSS.includes('--dsw-alias-settings-card-fill'), 'cards should use the settings-page fill')
+  assert(CSS.includes('--dsw-alias-settings-card-stroke'), 'cards should use the settings-page stroke')
+  assert(CSS.includes('--dsw-radius-xl'), 'cards should use the shell radius token')
+})
+
+test('a bar and its legend swatch share one opacity', () => {
+  // Regression: the bar and swatch opacities were two parallel ladders, and
+  // raising the cache-write swatch to make the two cache shades tell apart left
+  // the legend promising a shade the bar did not draw. They now read the same
+  // variable, so the pair cannot disagree.
+  const { CSS } = bundle.exports.__internal
+  const pairs = [
+    ['tkd_barCache', 'tkd_swatchCache', '--tkd-op-cache'],
+    ['tkd_barCacheWrite', 'tkd_swatchCacheWrite', '--tkd-op-cacheWrite'],
+    ['tkd_barAlt', 'tkd_swatchAlt', '--tkd-op-in'],
+    ['tkd_bar', 'tkd_swatch', '--tkd-op-out'],
+  ]
+  for (const [bar, swatch, variable] of pairs) {
+    const rule = new RegExp(`\\.${bar},\\.${swatch}\\{[^}]*opacity:var\\(${variable}\\)`)
+    assert(rule.test(CSS), `${bar} and ${swatch} must share ${variable}`)
+  }
+  // And the four shades must stay distinguishable from one another.
+  const values = [...CSS.matchAll(/--tkd-op-[a-zA-Z]+:([\d.]+)/g)].map((m) => Number(m[1]))
+  assertEqual(values.length, 4, 'expected four segment opacities')
+  assertEqual(new Set(values).size, 4, `the four segment shades must differ: ${values.join(', ')}`)
+})
+
+test('the chart no longer fixes its viewBox with a non-uniform stretch', () => {
+  const { CSS } = bundle.exports.__internal
+  assert(!CSS.includes('.tkd_chart{width:100%;height:190px'), 'the chart must not pin its own height')
+})
+
+test('the breakpoints are container queries, not viewport ones', () => {
+  // The dashboard lives in a resizable main pane, so a wide window with a
+  // narrow pane must still reflow. A `@media` breakpoint never fires there:
+  // it measures the window, which is not the space this page has.
+  const { CSS } = bundle.exports.__internal
+  assert(CSS.includes('container:tkd/inline-size'), 'the page must be a query container')
+  assert(CSS.includes('@container tkd'), 'the breakpoints must query the panel, not the viewport')
+  assert(!/@media \(max-width/.test(CSS), 'a viewport breakpoint would never fire for a narrow pane')
+})
+
+test('every class the stylesheet defines is still reachable', () => {
+  // Guards the opposite direction from the component assertions: a rule left
+  // behind after a refactor is dead weight in a shipped bundle.
+  const source = fs.readFileSync(CLIENT, 'utf8')
+  const css = bundle.exports.__internal.CSS
+  const declared = new Set([...css.matchAll(/\.(tkd_[A-Za-z0-9]+)/g)].map((m) => m[1]))
+  const dead = [...declared].filter((name) => !source.includes(`'${name}`) && !source.includes(` ${name}`))
+  assertEqual(dead, [], `dead stylesheet rules: ${dead.join(', ')}`)
+})
+
 group('client: copy')
 
 test('the two dictionaries carry identical key sets', () => {

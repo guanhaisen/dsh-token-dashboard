@@ -52,8 +52,8 @@ window.__ModuleLoader__.load({
 .tkd_footIcon{flex:none;justify-content:center;align-items:center;display:inline-flex}
 .tkd_footLabel{text-overflow:ellipsis;white-space:nowrap;min-width:0;overflow:hidden}
 .tkd_footValue{color:var(--dsw-alias-label-tertiary);font-variant-numeric:tabular-nums;flex:none;margin-left:auto;font-size:12px;line-height:16px}
-.tkd_page{box-sizing:border-box;height:100%;color:var(--dsw-alias-label-primary);flex-direction:column;align-items:center;gap:24px;padding:0 clamp(24px,4vw,48px) 48px;display:flex;overflow:auto}
-.tkd_head{box-sizing:border-box;justify-content:space-between;align-items:flex-start;gap:16px;padding-top:calc(28px + var(--dsh-frame-top-clearance,0px));width:100%;max-width:1100px;display:flex}
+.tkd_page{box-sizing:border-box;height:100%;color:var(--dsw-alias-label-primary);flex-direction:column;align-items:center;gap:24px;padding:0 clamp(24px,4vw,48px) 48px;display:flex;overflow:auto;container:tkd/inline-size;--tkd-op-cache:.18;--tkd-op-cacheWrite:.55;--tkd-op-in:.45;--tkd-op-out:1}
+.tkd_head{box-sizing:border-box;justify-content:space-between;align-items:flex-start;gap:16px;padding-top:calc(28px + var(--dsh-frame-top-clearance,0px));width:100%;max-width:1100px;display:flex;flex-wrap:wrap}
 .tkd_title{margin:0;font-size:20px;font-weight:500;line-height:28px}
 .tkd_intro{color:var(--dsw-alias-label-secondary);align-items:center;gap:4px;margin:4px 0 0;font-size:13px;line-height:20px;display:flex;flex-wrap:wrap}
 .tkd_headActions{align-items:center;gap:8px;flex:none;display:flex}
@@ -61,41 +61,56 @@ window.__ModuleLoader__.load({
 .tkd_ghost:hover{background:var(--dsw-alias-interactive-bg-hover)}
 .tkd_ghost:disabled{opacity:.5;cursor:default}
 .tkd_body{width:100%;max-width:1100px;flex-direction:column;gap:20px;display:flex}
-.tkd_kpis{grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;display:grid}
-.tkd_kpi{border:.5px solid var(--dsw-alias-border-l4);border-radius:12px;flex-direction:column;gap:4px;padding:12px 14px;display:flex}
+.tkd_kpis{flex-direction:column;gap:12px;display:flex}
+.tkd_kpiPrimaryRow{grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;display:grid}
+.tkd_kpiSecondaryRow{grid-template-columns:repeat(6,minmax(0,1fr));gap:10px;display:grid}
+.tkd_kpi{border:.5px solid var(--dsw-alias-settings-card-stroke);border-radius:var(--dsw-radius-xl);background:var(--dsw-alias-settings-card-fill);flex-direction:column;gap:4px;padding:12px 14px;display:flex}
 .tkd_kpiLabel{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:16px}
-.tkd_kpiValue{font-variant-numeric:tabular-nums;font-size:22px;font-weight:600;line-height:28px}
-.tkd_kpiSub{color:var(--dsw-alias-label-caption);font-size:11px;line-height:16px}
-.tkd_card{border:.5px solid var(--dsw-alias-border-l4);border-radius:12px;flex-direction:column;gap:12px;padding:16px;display:flex}
+.tkd_kpiValue{font-variant-numeric:tabular-nums;font-size:17px;font-weight:600;line-height:24px}
+.tkd_kpiSub{color:var(--dsw-alias-label-caption);font-size:11px;line-height:16px;min-height:16px}
+.tkd_kpiPrimary{padding:16px 18px}
+.tkd_kpiPrimary .tkd_kpiValue{font-size:26px;line-height:34px}
+.tkd_grid2{grid-template-columns:repeat(auto-fit,minmax(340px,1fr));align-items:start;gap:20px;display:grid}
+.tkd_card{border:.5px solid var(--dsw-alias-settings-card-stroke);border-radius:var(--dsw-radius-xl);background:var(--dsw-alias-settings-card-fill);flex-direction:column;gap:12px;padding:16px 20px;display:flex}
 .tkd_cardTitle{margin:0;font-size:14px;font-weight:500;line-height:20px}
-.tkd_chart{width:100%;height:190px;display:block;overflow:visible}
-.tkd_bar{fill:var(--dsw-alias-state-business-primary)}
-.tkd_barAlt{fill:var(--dsw-alias-state-business-primary);opacity:.45}
-.tkd_barCache{fill:var(--dsw-alias-state-business-primary);opacity:.18}
-.tkd_barCacheWrite{fill:var(--dsw-alias-state-business-primary);opacity:.3}
+.tkd_chartBox{min-width:0;width:100%}
+.tkd_chart{width:100%;display:block;overflow:visible}
+/* One opacity per segment, shared by its bar and its legend swatch. They were
+   two parallel ladders before, and they drifted: the legend promised a shade the
+   bar did not draw. Each segment now names its own variable, so a bar and the
+   swatch beside it can only ever be the same colour. */
+.tkd_bar,.tkd_swatch{fill:var(--dsw-alias-state-business-primary);background:var(--dsw-alias-state-business-primary);opacity:var(--tkd-op-out)}
+.tkd_barAlt,.tkd_swatchAlt{fill:var(--dsw-alias-state-business-primary);background:var(--dsw-alias-state-business-primary);opacity:var(--tkd-op-in)}
+.tkd_barCache,.tkd_swatchCache{fill:var(--dsw-alias-state-business-primary);background:var(--dsw-alias-state-business-primary);opacity:var(--tkd-op-cache)}
+.tkd_barCacheWrite,.tkd_swatchCacheWrite{fill:var(--dsw-alias-state-business-primary);background:var(--dsw-alias-state-business-primary);opacity:var(--tkd-op-cacheWrite)}
 .tkd_axis{stroke:var(--dsw-alias-border-l2);stroke-width:1}
 .tkd_tick{fill:var(--dsw-alias-label-caption);font-size:10px}
 .tkd_table{width:100%;border-collapse:collapse;font-size:13px}
 .tkd_table th{color:var(--dsw-alias-label-tertiary);text-align:right;font-weight:500;padding:6px 8px;border-bottom:.5px solid var(--dsw-alias-border-l2);font-size:12px;white-space:nowrap}
+.tkd_table thead th{position:sticky;top:0;background:var(--dsw-alias-settings-card-fill);z-index:1}
 .tkd_table th:first-child,.tkd_table td:first-child{text-align:left}
 .tkd_table td{text-align:right;font-variant-numeric:tabular-nums;padding:7px 8px;border-bottom:.5px solid var(--dsw-alias-border-l1);white-space:nowrap}
 .tkd_table tbody tr:last-child td{border-bottom:none}
+.tkd_trunc{max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block}
 .tkd_mono{font-family:var(--ds-font-family-code,monospace);font-size:12px}
-.tkd_muted{color:var(--dsw-alias-label-tertiary)}
 .tkd_err{color:var(--dsw-alias-state-error-primary)}
 .tkd_ok{color:var(--dsw-alias-state-success-primary)}
 .tkd_scroll{max-height:320px;overflow:auto}
 .tkd_empty{border:.5px dashed var(--dsw-alias-border-l2);border-radius:12px;color:var(--dsw-alias-label-secondary);text-align:center;padding:32px 20px;font-size:13px;line-height:22px}
 .tkd_note{color:var(--dsw-alias-label-tertiary);margin:0;font-size:12px;line-height:18px}
 .tkd_error{border:.5px solid var(--dsw-alias-state-error-primary);border-radius:12px;color:var(--dsw-alias-state-error-primary);padding:12px 14px;font-size:13px;line-height:20px}
-.tkd_legend{align-items:center;gap:12px;color:var(--dsw-alias-label-tertiary);font-size:12px;display:flex}
-.tkd_swatch{width:10px;height:10px;border-radius:2px;background:var(--dsw-alias-state-business-primary);flex:none;display:inline-block}
-.tkd_swatchAlt{opacity:.45}
-.tkd_swatchCache{opacity:.18}
-.tkd_swatchCacheWrite{opacity:.3}
-.tkd_spin{animation:tkd-spin 1s linear infinite}
-@keyframes tkd-spin{to{transform:rotate(360deg)}}
-@media (prefers-reduced-motion:reduce){.tkd_spin{animation:none}}
+.tkd_legend{align-items:center;gap:12px;color:var(--dsw-alias-label-tertiary);font-size:12px;display:flex;flex-wrap:wrap}
+.tkd_swatch{width:10px;height:10px;border-radius:2px;flex:none;display:inline-block}
+.tkd_legendZero{opacity:.45}
+/* Breakpoints are container queries, not viewport ones: this panel lives in a
+   resizable main pane, so a wide window with a narrow pane must reflow too. */
+@container tkd (max-width:1080px){.tkd_kpiSecondaryRow{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@container tkd (max-width:680px){
+.tkd_kpiPrimaryRow{grid-template-columns:minmax(0,1fr)}
+.tkd_kpiSecondaryRow{grid-template-columns:repeat(2,minmax(0,1fr))}
+.tkd_headActions{width:100%}
+.tkd_trunc{max-width:160px}
+}
 `
     if (typeof document !== 'undefined') {
       const tagId = 'dsh-token-dashboard/styles'
@@ -124,6 +139,76 @@ window.__ModuleLoader__.load({
       if (abs >= 1e6) return `${(n / 1e6).toFixed(2)}M`
       if (abs >= 1e4) return `${(n / 1e3).toFixed(1)}K`
       return n.toLocaleString('en-US')
+    }
+
+    /**
+     * Round a raw step up to the next `1 / 2 / 2.5 / 5 / 10 x 10^n` value.
+     * @param raw - the ideal step, before rounding.
+     * @returns the rounded step, or 0 when `raw` is not usable.
+     */
+    function niceStep(raw) {
+      if (!Number.isFinite(raw) || raw <= 0) return 0
+      const magnitude = 10 ** Math.floor(Math.log10(raw))
+      const normalized = raw / magnitude
+      const factor = normalized <= 1 ? 1 : normalized <= 2 ? 2 : normalized <= 2.5 ? 2.5 : normalized <= 5 ? 5 : 10
+      return factor * magnitude
+    }
+
+    /**
+     * The chart's axis top and step: round ticks that cover the peak.
+     *
+     * Dividing the peak by four and labelling those exact values is what made
+     * the axis read as noise — a 141.37M peak produced
+     * `35.34M / 70.68M / 106.02M / 141.37M`. Rounding the *step* up to a nice
+     * number instead gives `0 / 50M / 100M / 150M / 200M`, so the gridlines
+     * land on values a reader can hold in their head. The axis top is therefore
+     * normally a little above the peak, and the tallest bar stops just short of
+     * the top gridline — which is how a scaled axis is meant to look.
+     * @param peak - the largest stacked column total.
+     * @param steps - how many intervals the axis is divided into.
+     * @returns `{ max, step }`; both 0 for a non-positive peak.
+     */
+    function axisScale(peak, steps = 4) {
+      if (!Number.isFinite(peak) || peak <= 0) return { max: 0, step: 0 }
+      const step = niceStep(peak / steps)
+      return { max: step * steps, step }
+    }
+
+    /**
+     * One axis tick, labelled against the axis's own step.
+     *
+     * `formatTokens` is right for a KPI card, where the exact figure is the
+     * point, but wrong on an axis: it always spends two decimals, so a scale
+     * reads `33.02M / 66.05M / 99.07M / 132.09M`. The precision here comes from
+     * the step, so a round step prints as a round label (`50M`, `1,000`) and
+     * only a genuinely fractional one keeps a decimal (`2.5M`).
+     * @param value - the tick's token value.
+     * @param step - the axis step the ticks advance by.
+     * @returns a short label, or an em dash for a non-number.
+     */
+    function formatAxisTick(value, step) {
+      if (!Number.isFinite(value)) return '—'
+      // The baseline is a plain zero, not `0M`/`0K`: a unit on the origin reads
+      // as if the axis were offset from it.
+      if (value === 0) return '0'
+      const size = Number.isFinite(step) ? Math.abs(step) : 0
+      let unit = 1
+      let suffix = ''
+      if (size >= 1e9) {
+        unit = 1e9
+        suffix = 'B'
+      } else if (size >= 1e6) {
+        unit = 1e6
+        suffix = 'M'
+      } else if (size >= 1e3) {
+        unit = 1e3
+        suffix = 'K'
+      }
+      // Below the smallest unit the axis is in raw tokens, grouped.
+      if (unit === 1) return Math.round(value).toLocaleString('en-US')
+      const scaled = size / unit
+      const decimals = Number.isInteger(scaled) ? 0 : Number.isInteger(scaled * 10) ? 1 : 2
+      return `${(value / unit).toFixed(decimals)}${suffix}`
     }
 
     /** Percentage from a `0..1` rate, or an em dash when unknown. */
@@ -481,6 +566,42 @@ window.__ModuleLoader__.load({
       }, [load, intervalMs])
     }
 
+    /**
+     * Measure an element's content width, falling back to a constant.
+     *
+     * The chart used to draw into a fixed `0 0 1000 190` viewBox stretched to
+     * the panel with `preserveAspectRatio="none"`. Non-uniform scaling distorts
+     * everything that is not a rectangle: tick labels and day labels came out
+     * squeezed at 0.87x on a narrow panel and stretched at 1.6x on a wide one.
+     * Measuring lets the viewBox match the rendered pixel width, so the scale
+     * factor is exactly 1 and the text is drawn at its intended size.
+     *
+     * The fallback keeps a single render pass deterministic — in a test stub
+     * (no `ResizeObserver`) and before the first measurement, the chart is
+     * drawn exactly as it was before.
+     * @param fallback - width to use until a measurement arrives.
+     * @returns `[ref, width]`.
+     */
+    function useMeasuredWidth(fallback) {
+      const ref = React.useRef(null)
+      const [width, setWidth] = React.useState(0)
+      // Layout effect where available so the real width is known before paint;
+      // the test stubs carry only `useEffect`, hence the fallback.
+      const useIso = React.useLayoutEffect ?? React.useEffect
+      useIso(() => {
+        const node = ref.current
+        if (node === null || typeof node === 'undefined') return undefined
+        if (typeof ResizeObserver === 'undefined') return undefined
+        const observer = new ResizeObserver((entries) => {
+          const next = Math.round(entries[0]?.contentRect?.width ?? 0)
+          setWidth(next >= 240 ? next : 0)
+        })
+        observer.observe(node)
+        return () => observer.disconnect()
+      }, [])
+      return [ref, width >= 240 ? width : fallback]
+    }
+
     // ── foot entry ───────────────────────────────────────────────────────────
 
     /**
@@ -529,40 +650,71 @@ window.__ModuleLoader__.load({
 
     // ── dashboard page ───────────────────────────────────────────────────────
 
-    /** One labelled reading. */
+    /**
+     * One labelled reading.
+     *
+     * The sub-line renders unconditionally, even when empty. Only some cards
+     * carry one, and a card without it was shorter than its neighbours — so on
+     * a row of mixed cards the big figures sat at different heights and the
+     * grid read as ragged. An always-present `min-height` line keeps every card
+     * in a row the same height and every value on the same baseline.
+     * @param props - `{ label, value, sub?, tier? }`, `tier` being
+     *   `primary` (headline figure) or `secondary` (compact reading).
+     */
     function Kpi(props) {
+      const primary = props.tier === 'primary'
       return jsxs('div', {
-        className: 'tkd_kpi',
+        className: `tkd_kpi ${primary ? 'tkd_kpiPrimary' : 'tkd_kpiSecondary'}`,
         children: [
           jsx('span', { className: 'tkd_kpiLabel', children: props.label }),
           jsx('span', { className: 'tkd_kpiValue', children: props.value }),
-          props.sub === undefined ? null : jsx('span', { className: 'tkd_kpiSub', children: props.sub }),
+          jsx('span', { className: 'tkd_kpiSub', children: props.sub ?? '' }),
         ],
       })
     }
 
     /**
      * Stacked daily bar chart.
+     *
+     * The viewBox tracks the measured pixel width so the scale factor is 1: at
+     * a fixed 1000-wide viewBox stretched to the panel, every glyph was scaled
+     * by however wide the panel happened to be.
      * @param props - `{ days, t }`.
      */
     function Chart(props) {
       const { days, t } = props
       const columns = bucketDays(days, 30)
       const peak = chartPeak(columns)
-      const width = 1000
+      const [boxRef, width] = useMeasuredWidth(1000)
       const height = 190
       const padLeft = 52
       const padBottom = 22
       const plotWidth = width - padLeft - 8
       const plotHeight = height - padBottom - 8
       const slot = columns.length > 0 ? plotWidth / columns.length : plotWidth
-      const barWidth = Math.max(2, Math.min(28, slot * 0.62))
+      const barWidth = Math.max(2, Math.min(48, slot * 0.62))
+      // Bars are scaled against the rounded axis top, not the raw peak: the top
+      // gridline is labelled with the axis top, so a bar drawn against the peak
+      // would reach the top line while reading as a smaller number.
+      const axis = axisScale(peak)
+      const scaleMax = axis.max > 0 ? axis.max : peak
+
+      // Per-segment totals across the whole plot. A segment that is zero
+      // everywhere has nothing to show, so its legend entry is dimmed rather
+      // than removed: the four keys stay present for the aria description and
+      // the reader learns that the segment exists but is unused.
+      const segmentTotals = {}
+      for (const column of columns) {
+        for (const segment of columnSegments(column)) {
+          segmentTotals[segment.key] = (segmentTotals[segment.key] ?? 0) + segment.value
+        }
+      }
 
       const bars = []
       columns.forEach((column, index) => {
         const x = padLeft + slot * index + (slot - barWidth) / 2
         const total = columnTotal(column)
-        const scaled = peak > 0 ? (total / peak) * plotHeight : 0
+        const scaled = scaleMax > 0 ? (total / scaleMax) * plotHeight : 0
         const baseY = 8 + plotHeight
         // Stack bottom-up so each segment sits on the one before it.
         let cursor = baseY
@@ -582,6 +734,9 @@ window.__ModuleLoader__.load({
       })
 
       const ticks = []
+      // The axis top is `step * 4`, so tick `i` sits at `step * i` and every
+      // label is a multiple of the step itself.
+      const tickStep = axis.step > 0 ? axis.step : scaleMax / 4
       for (let i = 0; i <= 4; i += 1) {
         const y = 8 + plotHeight - (plotHeight / 4) * i
         ticks.push(jsx('line', { className: 'tkd_axis', x1: padLeft, x2: width - 8, y1: y, y2: y }, `grid-${i}`))
@@ -590,7 +745,7 @@ window.__ModuleLoader__.load({
           x: padLeft - 8,
           y: y + 3,
           textAnchor: 'end',
-          children: formatTokens((peak / 4) * i),
+          children: formatAxisTick(tickStep * i, tickStep),
         }, `tick-${i}`))
       }
 
@@ -613,13 +768,18 @@ window.__ModuleLoader__.load({
 
       return jsxs('div', {
         children: [
-          jsxs('svg', {
-            className: 'tkd_chart',
-            viewBox: `0 0 ${width} ${height}`,
-            preserveAspectRatio: 'none',
-            role: 'img',
-            'aria-label': t('chart.aria'),
-            children: [...ticks, ...bars, ...labels],
+          jsx('div', {
+            className: 'tkd_chartBox',
+            ref: boxRef,
+            children: jsxs('svg', {
+              className: 'tkd_chart',
+              width,
+              height,
+              viewBox: `0 0 ${width} ${height}`,
+              role: 'img',
+              'aria-label': t('chart.aria'),
+              children: [...ticks, ...bars, ...labels],
+            }),
           }),
           jsx('div', {
             className: 'tkd_legend',
@@ -629,6 +789,7 @@ window.__ModuleLoader__.load({
               { key: 'in', swatch: 'tkd_swatchAlt', label: 'chart.input' },
               { key: 'out', swatch: 'tkd_swatch', label: 'chart.output' },
             ].map((item) => jsxs('span', {
+              className: (segmentTotals[item.key] ?? 0) > 0 ? undefined : 'tkd_legendZero',
               children: [
                 jsx('span', { className: `tkd_swatch ${item.swatch}`, key: 's' }),
                 jsx('span', { key: 'l', children: ` ${t(item.label)}` }),
@@ -642,7 +803,11 @@ window.__ModuleLoader__.load({
     /**
      * One generic table.
      * @param props - `{ columns, rows, t }` where a column is
-     *   `{ key, label, mono?, render? }` and a row is a plain object.
+     *   `{ key, label, mono?, truncate?, render? }` and a row is a plain
+     *   object. `truncate` clips a long value with an ellipsis and keeps the
+     *   full text in `title` — a project path is long and unbreakable, and
+     *   `white-space:nowrap` on the cell turned it into a horizontal scrollbar
+     *   that pushed the numeric columns out of view.
      */
     function Table(props) {
       const { columns, rows } = props
@@ -660,9 +825,12 @@ window.__ModuleLoader__.load({
               children: rows.map((row, index) => jsx('tr', {
                 children: columns.map((column) => {
                   const value = column.render ? column.render(row) : row[column.key]
+                  const text = value === undefined || value === null ? '—' : value
                   return jsx('td', {
                     className: column.mono ? 'tkd_mono' : undefined,
-                    children: value === undefined || value === null ? '—' : value,
+                    children: column.truncate
+                      ? jsx('span', { className: 'tkd_trunc', title: String(text), children: text })
+                      : text,
                   }, column.key)
                 }),
               }, `${index}-${row.key ?? ''}`)),
@@ -776,31 +944,45 @@ window.__ModuleLoader__.load({
             jsxs('div', {
               className: 'tkd_kpis',
               children: [
-                jsx(Kpi, {
-                  label: t('kpi.total'),
-                  value: formatTokens(totals.totalTokens),
-                  sub: formatInt(totals.totalTokens),
-                }, 'total'),
-                jsx(Kpi, {
-                  label: t('kpi.nonCached'),
-                  value: formatTokens(totals.nonCachedTokens),
-                  sub: t('kpi.nonCachedHint'),
-                }, 'nonCached'),
-                jsx(Kpi, { label: t('kpi.input'), value: formatTokens(totals.inputTokens) }, 'input'),
-                jsx(Kpi, { label: t('kpi.output'), value: formatTokens(totals.outputTokens) }, 'output'),
-                jsx(Kpi, {
-                  label: t('kpi.cacheRead'),
-                  value: formatTokens(totals.cacheReadTokens),
-                  sub: formatRate(totals.cacheHitRate),
-                }, 'cache'),
-                jsx(Kpi, { label: t('kpi.reasoning'), value: formatTokens(totals.reasoningTokens) }, 'reasoning'),
-                jsx(Kpi, {
-                  label: t('kpi.requests'),
-                  value: formatInt(totals.requests),
-                  sub: totals.errors > 0 ? `${formatInt(totals.errors)} ${t('kpi.errors')}` : undefined,
-                }, 'requests'),
-                jsx(Kpi, { label: t('kpi.ttft'), value: formatMs(totals.avgTtftMs) }, 'ttft'),
-                jsx(Kpi, { label: t('kpi.avgDuration'), value: formatMs(totals.avgDurationMs) }, 'duration'),
+                jsxs('div', {
+                  className: 'tkd_kpiPrimaryRow',
+                  children: [
+                    jsx(Kpi, {
+                      tier: 'primary',
+                      label: t('kpi.total'),
+                      value: formatTokens(totals.totalTokens),
+                      sub: formatInt(totals.totalTokens),
+                    }, 'total'),
+                    jsx(Kpi, {
+                      tier: 'primary',
+                      label: t('kpi.nonCached'),
+                      value: formatTokens(totals.nonCachedTokens),
+                      sub: t('kpi.nonCachedHint'),
+                    }, 'nonCached'),
+                    jsx(Kpi, {
+                      tier: 'primary',
+                      label: t('kpi.cacheRead'),
+                      value: formatTokens(totals.cacheReadTokens),
+                      sub: formatRate(totals.cacheHitRate),
+                    }, 'cache'),
+                  ],
+                }),
+                jsxs('div', {
+                  className: 'tkd_kpiSecondaryRow',
+                  children: [
+                    jsx(Kpi, { tier: 'secondary', label: t('kpi.input'), value: formatTokens(totals.inputTokens) }, 'input'),
+                    jsx(Kpi, { tier: 'secondary', label: t('kpi.output'), value: formatTokens(totals.outputTokens) }, 'output'),
+                    jsx(Kpi, { tier: 'secondary', label: t('kpi.reasoning'), value: formatTokens(totals.reasoningTokens) }, 'reasoning'),
+                    jsx(Kpi, {
+                      tier: 'secondary',
+                      label: t('kpi.requests'),
+                      value: formatInt(totals.requests),
+                      sub: totals.errors > 0 ? `${formatInt(totals.errors)} ${t('kpi.errors')}` : undefined,
+                    }, 'requests'),
+                    jsx(Kpi, { tier: 'secondary', label: t('kpi.ttft'), value: formatMs(totals.avgTtftMs) }, 'ttft'),
+                    jsx(Kpi, { tier: 'secondary', label: t('kpi.avgDuration'), value: formatMs(totals.avgDurationMs) }, 'duration'),
+                  ],
+                }),
               ],
             }),
             jsxs('section', {
@@ -826,27 +1008,32 @@ window.__ModuleLoader__.load({
                 { key: 'avgTtftMs', label: t('col.ttft'), render: (row) => formatMs(row.avgTtftMs) },
               ],
             }),
-            jsx(TableCard, {
-              title: t('table.projects'),
-              t,
-              empty: t('table.empty'),
-              rows: data.projects,
-              columns: [
-                { key: 'cwd', label: t('col.project'), mono: true },
-                { key: 'totalTokens', label: t('col.total'), render: (row) => formatTokens(row.totalTokens) },
-                { key: 'requests', label: t('col.requests'), render: (row) => formatInt(row.requests) },
-                { key: 'cacheReadTokens', label: t('col.cacheRead'), render: (row) => formatTokens(row.cacheReadTokens) },
-              ],
-            }),
-            jsx(TableCard, {
-              title: t('table.purposes'),
-              t,
-              empty: t('table.empty'),
-              rows: data.purposes,
-              columns: [
-                { key: 'key', label: t('col.purpose') },
-                { key: 'totalTokens', label: t('col.total'), render: (row) => formatTokens(row.totalTokens) },
-                { key: 'requests', label: t('col.requests'), render: (row) => formatInt(row.requests) },
+            jsxs('div', {
+              className: 'tkd_grid2',
+              children: [
+                jsx(TableCard, {
+                  title: t('table.projects'),
+                  t,
+                  empty: t('table.empty'),
+                  rows: data.projects,
+                  columns: [
+                    { key: 'cwd', label: t('col.project'), mono: true, truncate: true },
+                    { key: 'totalTokens', label: t('col.total'), render: (row) => formatTokens(row.totalTokens) },
+                    { key: 'requests', label: t('col.requests'), render: (row) => formatInt(row.requests) },
+                    { key: 'cacheReadTokens', label: t('col.cacheRead'), render: (row) => formatTokens(row.cacheReadTokens) },
+                  ],
+                }),
+                jsx(TableCard, {
+                  title: t('table.purposes'),
+                  t,
+                  empty: t('table.empty'),
+                  rows: data.purposes,
+                  columns: [
+                    { key: 'key', label: t('col.purpose') },
+                    { key: 'totalTokens', label: t('col.total'), render: (row) => formatTokens(row.totalTokens) },
+                    { key: 'requests', label: t('col.requests'), render: (row) => formatInt(row.requests) },
+                  ],
+                }),
               ],
             }),
             jsxs('section', {
@@ -1094,6 +1281,9 @@ window.__ModuleLoader__.load({
       formatClock,
       formatDayShort,
       formatUtcOffset,
+      formatAxisTick,
+      niceStep,
+      axisScale,
       template,
       normalizeDashboard,
       isDashboard,
@@ -1101,6 +1291,7 @@ window.__ModuleLoader__.load({
       columnSegments,
       columnTotal,
       bucketDays,
+      CSS,
       zh,
       en,
       PANEL_ID,

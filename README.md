@@ -10,12 +10,19 @@ directly above your account row.
 ```
 sidebar foot                    dashboard panel
 ┌──────────────────────┐        ┌──────────────────────────────────────┐
-│  📊 Token usage 12.3K │  ───▶  │  8 KPI cards                          │
+│  📊 Token usage 12.3K │  ───▶  │  3 headline + 6 compact KPI cards     │
 ├──────────────────────┤        │  daily stacked bar chart              │
-│  G  Greye            │        │  by model / project / purpose tables  │
+│  G  Greye            │        │  by model, then project | purpose     │
 └──────────────────────┘        │  recent calls                         │
                                 └──────────────────────────────────────┘
 ```
+
+The layout is built for the pane it is given rather than for the window: the
+KPI rows, the two-column table row and the truncation of long project paths all
+key off the **panel** width (a container query), so a narrow main pane reflows
+even when the window is wide. The chart measures its own width and draws its
+viewBox to match, so its labels are never scaled by whatever the panel happened
+to be.
 
 > **Third-party, non-invasive plugin.** It mounts from your DSH profile, never
 > touches `app.asar`, and leaves every shipped component exactly as it is.
@@ -159,6 +166,14 @@ so the bar's height is the same total the card reports. Cache is drawn lowest
 deliberately: at 99% of the bar it would otherwise push input and output off the
 top of the plot.
 
+The chart's vertical axis is scaled to round numbers rather than to the raw peak:
+the step is rounded up to a `1 / 2 / 2.5 / 5 / 10` value, so a 143M peak draws
+gridlines at `0 / 50M / 100M / 150M / 200M` instead of
+`35.8M / 71.6M / 107.5M / 143.3M`. The tallest bar therefore stops just below the
+top gridline, and the gridline it stops under is the number it is drawn against —
+the bars are scaled to the rounded axis top, not to the peak, so the bar and the
+label can never disagree.
+
 Other figures:
 
 - **Cache hit rate** = `cacheReadTokens / (inputTokens + cacheReadTokens)`. When
@@ -242,6 +257,20 @@ the default.
 - **Usage is whatever the provider reported.** Providers that do not report
   usage produce requests with zero tokens; the dashboard shows them as requests
   and does not invent numbers.
+- **A superseded attempt counts as its own request, and is not counted as an
+  error.** `llm/stream` is entered once per provider attempt, and DSH retries a
+  failed attempt as a fresh attempt inside the same step. An attempt that ends
+  without reporting usage therefore contributes one `requests` and no tokens, and
+  lands in the recent-calls table as a zero-token row marked `ok`. Measured
+  against the session logs, its fingerprint is unmistakable: `ttftMs ===
+  durationMs` (the only chunk arrives as the stream ends, so the first-token
+  sample equals the total duration), `usageReported: false`, a `llm/retry` event
+  inside its span on the same session, and a transport failure. The consequence
+  is that `requests` counts *attempts*, tracking but slightly exceeding the
+  number of billed calls, and that `errors` does not reflect retries. Token
+  totals are unaffected: a superseded attempt reports no usage, so it adds none.
+  In a measured day the plugin's token total reconciled with the logs to within
+  0.06%, and 294 of 295 calls matched field for field.
 - **Desktop profile is what this was developed and tested against.** It should
   work in any profile whose composition provides `llm` and a `connection`
   carrier, but only the Desktop composition has been exercised.
@@ -263,7 +292,7 @@ test/              Zero-dependency test suite
 npm test          # or: node test/run-all.cjs
 ```
 
-244 assertions across seven files:
+265 assertions across seven files:
 
 | File | Covers |
 |---|---|
@@ -271,9 +300,9 @@ npm test          # or: node test/run-all.cjs
 | `store-check.cjs` | Debounced flush, atomic write, **reading the whole day back after a restart**, repeated reads not accumulating, **interleaved flushes from two stores losing no counts**, retention trimming, detail dedup and cap, write-failure and throwing-logger containment, **a failed write being retried on unload instead of dropping its delta** |
 | `recorder-check.cjs` | Chunks pass through unchanged (same object identity), laziness, exactly one record per call, errors rethrown unchanged, consumer abandonment, a throwing sink never reaching the model lane |
 | `route-check.cjs` | 405 / 415 / 400, envelope validation, rpcId echo, unknown method, a throwing store not escaping, all four ranges, the empty ledger |
-| `client-check.cjs` | Bundle load under a stub facade, slot registration and ordering, no-connection degradation, the source state machine, **a range switch superseding an in-flight read and aborting without an error state**, formatting, chart bucketing, **cache-write parity between bar and card**, payload normalization, matching zh/en key sets |
+| `client-check.cjs` | Bundle load under a stub facade, slot registration and ordering, no-connection degradation, the source state machine, **a range switch superseding an in-flight read and aborting without an error state**, formatting, **the axis step rounding to a nice number and every tick printing at one precision**, chart bucketing, **cache-write parity between bar and card**, **the panel-width container queries and the absence of a viewport breakpoint**, **no dead stylesheet rule**, payload normalization, matching zh/en key sets |
 | `integration-check.cjs` | The real `apply()` end to end: one model call → ledger → read back through the route; cwd and purpose dimensions; a failed call counted as an error; flush on unload and continued counts on a second mount; **an existing ledger surviving a bad retention setting**; an aborted request |
-| `render-check.cjs` | Every branch of both components rendered: wide and rail states, loading/error/no-connection/empty states, chart geometry and zero-height bars, **a bar reaching the card's total with cache writes present**, **a payload with no `totals` at all**, missing `meta`/`totals` not crashing, accessible names, the footnote's zone |
+| `render-check.cjs` | Every branch of both components rendered: wide and rail states, loading/error/no-connection/empty states, **the KPI split into a 3-card headline row and a 6-card compact row with a sub-line on every card**, **a chart whose viewBox matches its rendered width and no `preserveAspectRatio` stretch**, **round axis ticks**, chart geometry and zero-height bars, **a bar scaled to the rounded axis top**, **a bar reaching the card's total with cache writes present**, **the project and purpose cards sharing a row**, **a long project path clipped with its full text kept in `title`**, **an unused segment dimmed in the legend but not dropped**, **a payload with no `totals` at all**, missing `meta`/`totals` not crashing, accessible names, the footnote's zone |
 
 Every test seam is exported from the Host half as `__internal` and exercised
 directly.

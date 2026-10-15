@@ -345,22 +345,28 @@ test('a zero cache-write day omits the segment rather than drawing nothing', () 
   assert(!html.includes('tkd_barCacheWrite'), 'a zero-width segment should not be emitted')
 })
 
-/** Every `height="..."` in the markup, in document order. */
+/** Every bar `height="..."` in the markup, in document order.
+ *
+ * Matched on `<rect>` rather than on any `height="..."` attribute: the chart's
+ * own `<svg>` carries a height too, and counting that as a bar made a
+ * four-segment stack look like five. The helper exists to check the stacking
+ * geometry, so it must count only the stacked rectangles. */
 function barHeights(html) {
-  return [...html.matchAll(/height="([\d.]+)"/g)].map((match) => Number(match[1]))
+  return [...html.matchAll(/<rect[^>]*height="([\d.]+)"/g)].map((match) => Number(match[1]))
 }
 
 test('a day with cache writes fills the plot exactly, matching the KPI total', () => {
   // Regression: the bar stacked only cache-read + input + output while the KPI
   // card totalled cache-read + cache-write + input + output, so the bar was
   // drawn short by exactly the cache-write share on any provider reporting it.
-  // A single peak day must therefore stack to the full plot height (160), which
-  // is only reachable when every segment the total counts is also drawn.
+  // The day totals 2,000, which the axis rounds to 2,000 exactly, so a single
+  // peak day must stack to the full plot height (160) — reachable only when
+  // every segment the total counts is also drawn.
   const day = {
     day: '2026-10-14',
-    inputTokens: 100, outputTokens: 50,
-    cacheReadTokens: 850, cacheWriteTokens: 400,
-    requests: 1, totalTokens: 1_400, nonCachedTokens: 150,
+    inputTokens: 200, outputTokens: 100,
+    cacheReadTokens: 1300, cacheWriteTokens: 400,
+    requests: 1, totalTokens: 2_000, nonCachedTokens: 300,
     cacheHitRate: 0.9, avgTtftMs: 200,
   }
   const state = ready()
@@ -372,14 +378,31 @@ test('a day with cache writes fills the plot exactly, matching the KPI total', (
   const stacked = heights.reduce((sum, height) => sum + height, 0)
   assertClose(stacked, 160, 0.5, 'the stacked bar must fill the plot for a peak day')
   // And the card above it shows that same figure.
-  assert(html.includes('>1,400<'), `the KPI total should match the bar: ${html.slice(0, 900)}`)
+  assert(html.includes('>2,000<'), `the KPI total should match the bar: ${html.slice(0, 900)}`)
+})
+
+test('the bar is scaled against the rounded axis top, not the raw peak', () => {
+  // The top gridline is labelled with the axis top, so a bar drawn against the
+  // raw peak would touch a gridline that reads as a larger number.
+  const day = {
+    day: '2026-10-14', inputTokens: 400, outputTokens: 100,
+    cacheReadTokens: 900, cacheWriteTokens: 0,
+    requests: 1, totalTokens: 1_400,
+  }
+  const state = ready()
+  state.page.data.days = [day]
+  state.page.data.totals = { ...state.page.data.totals, ...day }
+  const html = render(React.createElement(DashboardPage, { source: sourceStub(state), t }))
+  const stacked = barHeights(html).reduce((sum, height) => sum + height, 0)
+  // 1,400 against a 2,000 axis top over a 160px plot.
+  assertClose(stacked, (1_400 / 2_000) * 160, 0.5, 'the bar must scale to the axis top')
 })
 
 test('a day without cache writes still stacks to the full plot', () => {
   const day = {
     day: '2026-10-14',
-    inputTokens: 100, outputTokens: 50, cacheReadTokens: 850, cacheWriteTokens: 0,
-    requests: 1, totalTokens: 1_000, nonCachedTokens: 150,
+    inputTokens: 200, outputTokens: 100, cacheReadTokens: 1700, cacheWriteTokens: 0,
+    requests: 1, totalTokens: 2_000, nonCachedTokens: 300,
   }
   const state = ready()
   state.page.data.days = [day]
@@ -390,10 +413,10 @@ test('a day without cache writes still stacks to the full plot', () => {
 })
 
 test('the chart scales to the cache-inclusive total', () => {
-  // Days of 1,000 and 2,000 total tokens: the axis peak must reflect those,
-  // not the 150/280 billable remainder, or the bars would be drawn 6x too tall.
+  // Days of 1,000 and 2,000 total tokens: the axis must reflect those, not the
+  // 150/280 non-cached remainder, or the bars would be drawn 6x too tall.
   const html = render(React.createElement(DashboardPage, { source: sourceStub(ready()), t }))
-  assert(html.includes('>2,000<'), `expected a cache-inclusive axis peak: ${html.slice(0, 900)}`)
+  assert(html.includes('>2,000<'), `expected a cache-inclusive axis: ${html.slice(0, 900)}`)
 })
 
 test('the legend swatches are distinct from one another', () => {
@@ -592,6 +615,106 @@ test('a non-numeric today total renders no figure rather than NaN', () => {
   }))
   assert(!html.includes('NaN'), `NaN leaked into the row: ${html}`)
   assert(html.includes('foot.trigger'), html)
+})
+
+group('render: dashboard layout')
+
+/** Count the elements carrying one class, by counting its occurrences. */
+function countClass(html, className) {
+  return [...html.matchAll(new RegExp(`class="[^"]*\\b${className}\\b[^"]*"`, 'g'))].length
+}
+
+test('the KPIs are split into a primary row of three and a secondary row of six', () => {
+  // Regression: one `auto-fit` grid of nine cards packed five to a row and left
+  // the second row with four and an empty column, so the figures never lined up
+  // into a readable hierarchy.
+  const html = render(React.createElement(DashboardPage, { source: sourceStub(ready()), t }))
+  assert(html.includes('class="tkd_kpiPrimaryRow"'), 'no primary KPI row')
+  assert(html.includes('class="tkd_kpiSecondaryRow"'), 'no secondary KPI row')
+  assertEqual(countClass(html, 'tkd_kpiPrimary'), 3, `primary cards: ${html.slice(0, 400)}`)
+  assertEqual(countClass(html, 'tkd_kpiSecondary'), 6, 'secondary cards')
+})
+
+test('every KPI card carries a sub-line, so a row cannot go ragged', () => {
+  // Cards with and without a sub-line were different heights, which pushed the
+  // big figures off a shared baseline.
+  const html = render(React.createElement(DashboardPage, { source: sourceStub(ready()), t }))
+  assertEqual(countClass(html, 'tkd_kpiSub'), 9, 'every card needs a sub-line element')
+})
+
+test('the chart viewBox tracks the rendered width instead of a fixed 1000', () => {
+  // A fixed viewBox stretched with preserveAspectRatio="none" scaled every
+  // glyph by the panel's width: squeezed at 0.87x on a narrow panel, stretched
+  // at 1.6x on a wide one. The viewBox must match the element's own width, and
+  // the non-uniform stretch must be gone.
+  const html = render(React.createElement(DashboardPage, { source: sourceStub(ready()), t }))
+  assert(!html.includes('preserveAspectRatio'), 'the chart still stretches non-uniformly')
+  const svg = /<svg[^>]*>/.exec(html)
+  assert(svg !== null, 'no chart svg')
+  const width = /width="(\d+)"/.exec(svg[0])
+  const viewBox = /viewBox="0 0 (\d+) (\d+)"/.exec(svg[0])
+  assert(width !== null, `the svg has no width: ${svg[0]}`)
+  assert(viewBox !== null, `the svg has no viewBox: ${svg[0]}`)
+  assertEqual(viewBox[1], width[1], 'the viewBox width must equal the rendered width')
+  assertEqual(viewBox[2], '190', 'the viewBox height is unchanged')
+})
+
+test('the axis ticks are round numbers, not the raw peak divided by four', () => {
+  // A 132M peak used to render as 132.09M / 99.07M / 66.05M / 33.02M. Rounding
+  // the step up to a nice number instead puts the gridlines on values a reader
+  // can hold in their head.
+  const state = ready()
+  state.page.data.days = [{ day: '2026-10-15', inputTokens: 0, outputTokens: 0, cacheReadTokens: 132_000_000, requests: 1 }]
+  state.page.data.totals = { ...state.page.data.totals, cacheReadTokens: 132_000_000, totalTokens: 132_000_000 }
+  const html = render(React.createElement(DashboardPage, { source: sourceStub(state), t }))
+  for (const tick of ['0', '50M', '100M', '150M', '200M']) {
+    assert(html.includes(`>${tick}</text>`), `missing tick ${tick}: ${html.slice(0, 900)}`)
+  }
+  assert(!html.includes('.09M'), 'a raw-division tick leaked in')
+})
+
+test('the projects and purposes cards share a row', () => {
+  const html = render(React.createElement(DashboardPage, { source: sourceStub(ready()), t }))
+  const at = html.indexOf('class="tkd_grid2"')
+  assert(at !== -1, `no two-column card grid: ${html.slice(0, 500)}`)
+  // Both small tables live inside the grid, which closes before the recent
+  // calls card; the wide model table stays outside it, above.
+  const after = html.slice(at)
+  assert(after.includes('table.projects'), 'the projects card is not in the grid')
+  assert(after.includes('table.purposes'), 'the purposes card is not in the grid')
+  assert(html.indexOf('table.models') < at, 'the model table should stay full width, above the grid')
+})
+
+test('a long project path is clipped and keeps its full text in the title', () => {
+  // `white-space:nowrap` on the cell turned an unbreakable path into a
+  // horizontal scrollbar that pushed the numeric columns off screen.
+  const long = 'D:\\VibeCoding\\Deepseek\\a-very-long-project-directory-name'
+  const state = ready()
+  state.page.data.projects = [{
+    key: long, cwd: long, totalTokens: 100, nonCachedTokens: 10, requests: 1, cacheReadTokens: 90,
+  }]
+  const html = render(React.createElement(DashboardPage, { source: sourceStub(state), t }))
+  assert(html.includes('tkd_trunc'), `the path is not clipped: ${html.slice(0, 900)}`)
+  assert(html.includes(`title="${long}"`), 'the full path must survive in the title')
+})
+
+test('an unused chart segment is dimmed rather than dropped from the legend', () => {
+  // The four legend keys must stay present (the aria description names them),
+  // but a segment that is zero everywhere should read as unused instead of
+  // claiming a colour it never draws.
+  const state = ready()
+  state.page.data.days = [{
+    day: '2026-10-14', inputTokens: 10, outputTokens: 5,
+    cacheReadTokens: 100, cacheWriteTokens: 0, requests: 1, totalTokens: 115,
+  }]
+  const html = render(React.createElement(DashboardPage, { source: sourceStub(state), t }))
+  for (const key of ['chart.cache', 'chart.cacheWrite', 'chart.input', 'chart.output']) {
+    assert(html.includes(key), `legend entry ${key} disappeared`)
+  }
+  assert(html.includes('tkd_legendZero'), 'the unused segment should be dimmed')
+  // And the used ones must not all be dimmed with it.
+  const dimmed = countClass(html, 'tkd_legendZero')
+  assert(dimmed < 4, `only the unused segment may be dimmed, got ${dimmed}`)
 })
 
 ;(async () => {
