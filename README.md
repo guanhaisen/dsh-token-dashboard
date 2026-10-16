@@ -174,6 +174,16 @@ top gridline, and the gridline it stops under is the number it is drawn against 
 the bars are scaled to the rounded axis top, not to the peak, so the bar and the
 label can never disagree.
 
+**Hovering a bar shows that day's breakdown.** The tooltip lists all four
+segments at their exact values (not the compact `K`/`M` form the cards use) plus
+the column total, so a figure can be read off the chart without switching to the
+tables. The whole column is the hover target rather than the bar itself — on a
+cache-heavy day a barely-used day is a hairline — and the hovered column is
+tinted so a zero-height day is still visibly selected. A column that buckets
+several days says so (`· 7 day bucket`) instead of passing a week's figure off as
+one day's. The tooltip is drawn from the same declaration as the legend, so a row
+and its swatch cannot disagree about a segment's colour.
+
 Other figures:
 
 - **Cache hit rate** = `cacheReadTokens / (inputTokens + cacheReadTokens)`. When
@@ -292,7 +302,7 @@ test/              Zero-dependency test suite
 npm test          # or: node test/run-all.cjs
 ```
 
-265 assertions across seven files:
+279 assertions across seven files:
 
 | File | Covers |
 |---|---|
@@ -300,9 +310,9 @@ npm test          # or: node test/run-all.cjs
 | `store-check.cjs` | Debounced flush, atomic write, **reading the whole day back after a restart**, repeated reads not accumulating, **interleaved flushes from two stores losing no counts**, retention trimming, detail dedup and cap, write-failure and throwing-logger containment, **a failed write being retried on unload instead of dropping its delta** |
 | `recorder-check.cjs` | Chunks pass through unchanged (same object identity), laziness, exactly one record per call, errors rethrown unchanged, consumer abandonment, a throwing sink never reaching the model lane |
 | `route-check.cjs` | 405 / 415 / 400, envelope validation, rpcId echo, unknown method, a throwing store not escaping, all four ranges, the empty ledger |
-| `client-check.cjs` | Bundle load under a stub facade, slot registration and ordering, no-connection degradation, the source state machine, **a range switch superseding an in-flight read and aborting without an error state**, formatting, **the axis step rounding to a nice number and every tick printing at one precision**, chart bucketing, **cache-write parity between bar and card**, **the panel-width container queries and the absence of a viewport breakpoint**, **no dead stylesheet rule**, payload normalization, matching zh/en key sets |
+| `client-check.cjs` | Bundle load under a stub facade, slot registration and ordering, no-connection degradation, the source state machine, **a range switch superseding an in-flight read and aborting without an error state**, formatting, **the axis step rounding to a nice number and every tick printing at one precision**, chart bucketing, **cache-write parity between bar and card**, **the panel-width container queries and the absence of a viewport breakpoint**, **the tooltip's half-width being a real bound on the tooltip and the gridlines not swallowing the pointer**, **no dead stylesheet rule**, payload normalization, matching zh/en key sets |
 | `integration-check.cjs` | The real `apply()` end to end: one model call → ledger → read back through the route; cwd and purpose dimensions; a failed call counted as an error; flush on unload and continued counts on a second mount; **an existing ledger surviving a bad retention setting**; an aborted request |
-| `render-check.cjs` | Every branch of both components rendered: wide and rail states, loading/error/no-connection/empty states, **the KPI split into a 3-card headline row and a 6-card compact row with a sub-line on every card**, **a chart whose viewBox matches its rendered width and no `preserveAspectRatio` stretch**, **round axis ticks**, chart geometry and zero-height bars, **a bar scaled to the rounded axis top**, **a bar reaching the card's total with cache writes present**, **the project and purpose cards sharing a row**, **a long project path clipped with its full text kept in `title`**, **an unused segment dimmed in the legend but not dropped**, **a payload with no `totals` at all**, missing `meta`/`totals` not crashing, accessible names, the footnote's zone |
+| `render-check.cjs` | Every branch of both components rendered: wide and rail states, loading/error/no-connection/empty states, **the KPI split into a 3-card headline row and a 6-card compact row with a sub-line on every card**, **a chart whose viewBox matches its rendered width and no `preserveAspectRatio` stretch**, **round axis ticks**, chart geometry and zero-height bars, **a bar scaled to the rounded axis top**, **a bar reaching the card's total with cache writes present**, **the project and purpose cards sharing a row**, **a long project path clipped with its full text kept in `title`**, **an unused segment dimmed in the legend but not dropped**, **chart hover driven through real component state: one hit area per column, no tooltip until a hover, the segment figures and total for the hovered day, the tooltip following the pointer column to column and hiding on leave, the tinted track marking exactly one column, a bucketed column labelled as multi-day, a zero-token day still explained, the tooltip clamped at both edges and centred on its slot, and the tooltip living inside the positioned chart box**, **a payload with no `totals` at all**, missing `meta`/`totals` not crashing, accessible names, the footnote's zone |
 
 Every test seam is exported from the Host half as `__internal` and exercised
 directly.

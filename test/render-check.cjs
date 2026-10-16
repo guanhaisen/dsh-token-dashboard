@@ -45,26 +45,120 @@ const primitives = new Proxy({}, {
   get: (_target, key) => (typeof key === 'string' ? `Primitive:${key}` : undefined),
 })
 
-/** Load the bundle under a captured module facade. */
-function loadBundle() {
-  let registration
-  const previous = global.window
-  global.window = { __ModuleLoader__: { load: (entry) => { registration = entry } } }
-  try {
-    const CLIENT = path.join(__dirname, '..', 'client.js')
-    delete require.cache[require.resolve(CLIENT)]
-    require(CLIENT)
-  } finally {
-    global.window = previous
+/** The captured module registration; the bundle is ESM, so it runs once. */
+let capturedRegistration
+
+/** Load the bundle under a captured module facade.
+ *
+ * The bundle is ESM (the package is `type: module`), so `require.cache` does not
+ * apply and a second `require` returns the already-executed module without
+ * re-registering. The factory takes its module surface as an argument, so the
+ * registration is captured once and the factory is simply called again with a
+ * different React when a test needs stateful hooks.
+ * @param react - the React surface to build the factory with; defaults to the
+ *   inert one above, which renders a single pass and cannot change state. */
+function loadBundle(react = React) {
+  if (capturedRegistration === undefined) {
+    let registration
+    const previous = global.window
+    global.window = { __ModuleLoader__: { load: (entry) => { registration = entry } } }
+    try {
+      const CLIENT = path.join(__dirname, '..', 'client.js')
+      delete require.cache[require.resolve(CLIENT)]
+      require(CLIENT)
+    } finally {
+      global.window = previous
+    }
+    assert(registration !== undefined, 'the bundle registered no factory')
+    capturedRegistration = registration
   }
-  assert(registration !== undefined, 'the bundle registered no factory')
   const requireStub = (id) => {
-    if (id === 'react') return React
+    if (id === 'react') return react
     if (id === 'react/jsx-runtime') return jsxRuntime
     if (id === '@deepseek-ai/dsh-client-ui-primitives') return primitives
     throw new Error(`unexpected module request: ${id}`)
   }
-  return registration.factory(requireStub)
+  return capturedRegistration.factory(requireStub)
+}
+
+/**
+ * A React surface whose `useState` really holds state, so a hover can be
+ * exercised: the handler a hit area carries is invoked, and the component is
+ * then re-rendered the way React would re-render it.
+ *
+ * Hooks are keyed by call order within a render pass, which is exactly how the
+ * components call them (they are not conditional), so the nth `useState` always
+ * lands in the same slot.
+ */
+function makeInteractiveReact() {
+  const state = []
+  let cursor = 0
+  let dirty = false
+  const refs = []
+  let refCursor = 0
+  const react = {
+    createElement: (type, props, ...children) => ({
+      type,
+      props: { ...(props ?? {}), ...(children.length > 0 ? { children } : {}) },
+    }),
+    Fragment: 'Fragment',
+    useCallback: (fn) => fn,
+    useEffect: () => {},
+    useMemo: (fn) => fn(),
+    useRef: (value) => {
+      const slot = refCursor
+      refCursor += 1
+      if (refs[slot] === undefined) refs[slot] = { current: value }
+      return refs[slot]
+    },
+    useState: (initial) => {
+      const slot = cursor
+      cursor += 1
+      if (!(slot in state)) state[slot] = initial
+      const set = (next) => {
+        state[slot] = typeof next === 'function' ? next(state[slot]) : next
+        dirty = true
+      }
+      return [state[slot], set]
+    },
+    useSyncExternalStore: (_subscribe, getSnapshot) => getSnapshot(),
+  }
+  return {
+    react,
+    /** Render one element, collecting every element node it produced. */
+    render(element) {
+      cursor = 0
+      refCursor = 0
+      const elements = []
+      const html = renderCollect(element, elements)
+      return { html, elements }
+    },
+    /** Whether a state setter ran since the last render. */
+    get dirty() { return dirty },
+    resetDirty() { dirty = false },
+  }
+}
+
+/** Render a node, pushing every element node into `elements` as it goes. */
+function renderCollect(node, elements) {
+  if (node === null || node === undefined || typeof node === 'boolean') return ''
+  if (Array.isArray(node)) return node.map((child) => renderCollect(child, elements)).join('')
+  if (typeof node === 'string' || typeof node === 'number') return escape(node)
+  if (typeof node.type === 'function') return renderCollect(node.type(node.props), elements)
+  elements.push(node)
+  const children = renderCollect(node.props?.children, elements)
+  const { type, props } = node
+  if (typeof type !== 'string') return `<${type}>${children}</${type}>`
+  const attributes = Object.entries(props ?? {})
+    .filter(([key, value]) => key !== 'children' && key !== 'key' && typeof value !== 'function')
+    .map(([key, value]) => {
+      if (value === undefined || value === null || value === false) return ''
+      const name = key === 'className' ? 'class' : key
+      if (value === true) return ` ${name}`
+      return ` ${name}="${escape(value)}"`
+    })
+    .join('')
+  return `<${type}${attributes}>${children}</${type}>`
 }
 
 const ESCAPES = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }
@@ -345,14 +439,16 @@ test('a zero cache-write day omits the segment rather than drawing nothing', () 
   assert(!html.includes('tkd_barCacheWrite'), 'a zero-width segment should not be emitted')
 })
 
-/** Every bar `height="..."` in the markup, in document order.
+/** Every stacked-bar `height="..."` in the markup, in document order.
  *
- * Matched on `<rect>` rather than on any `height="..."` attribute: the chart's
- * own `<svg>` carries a height too, and counting that as a bar made a
- * four-segment stack look like five. The helper exists to check the stacking
- * geometry, so it must count only the stacked rectangles. */
+ * Matched on a bar `<rect>` rather than on any `height="..."` attribute. The
+ * chart's own `<svg>` carries a height, and the hover track rects carry a
+ * full-plot height, so a looser match counted both and made a four-segment
+ * stack look like five or more. The helper exists to check the stacking
+ * geometry, so it counts only the rectangles that carry a bar class. */
 function barHeights(html) {
-  return [...html.matchAll(/<rect[^>]*height="([\d.]+)"/g)].map((match) => Number(match[1]))
+  return [...html.matchAll(/<rect[^>]*class="(tkd_bar[A-Za-z]*)"[^>]*height="([\d.]+)"/g)]
+    .map((match) => Number(match[2]))
 }
 
 test('a day with cache writes fills the plot exactly, matching the KPI total', () => {
@@ -715,6 +811,225 @@ test('an unused chart segment is dimmed rather than dropped from the legend', ()
   // And the used ones must not all be dimmed with it.
   const dimmed = countClass(html, 'tkd_legendZero')
   assert(dimmed < 4, `only the unused segment may be dimmed, got ${dimmed}`)
+})
+
+group('render: chart hover tooltip')
+
+/** A ready page whose days are known, so the tooltip's figures are predictable. */
+function chartState() {
+  const state = ready()
+  state.page.data.days = [
+    {
+      day: '2026-10-15', inputTokens: 1000, outputTokens: 500,
+      cacheReadTokens: 8000, cacheWriteTokens: 0, requests: 3, totalTokens: 9500,
+    },
+    {
+      day: '2026-10-16', inputTokens: 2000, outputTokens: 300,
+      cacheReadTokens: 12000, cacheWriteTokens: 0, requests: 5, totalTokens: 14300,
+    },
+  ]
+  return state
+}
+
+/** Render the page with a stateful React, and return the tooltip driver. */
+function hoverProbe() {
+  const interactive = makeInteractiveReact()
+  const bundle = loadBundle(interactive.react)
+  let shown = interactive.render(React.createElement(bundle.DashboardPage, {
+    source: sourceStub(chartState()), t,
+  }))
+  return {
+    /** The markup as it stands now. */
+    get html() { return shown.html },
+    /** Every element node of the current render. */
+    get elements() { return shown.elements },
+    /** The hit area for one column. */
+    hit(index) {
+      return shown.elements.find((el) => el.key === `hit-${index}`)
+    },
+    /** Fire one handler on the column's hit area and re-render. */
+    fire(index, handler) {
+      const target = this.hit(index)
+      assert(target !== undefined, `no hit area for column ${index}`)
+      target.props[handler]()
+      interactive.resetDirty()
+      shown = interactive.render(React.createElement(bundle.DashboardPage, {
+        source: sourceStub(chartState()), t,
+      }))
+    },
+  }
+}
+
+test('every column gets a full-slot hit area on top of the bars', () => {
+  // A thin (or zero-height) bar is hard to hit, so the hover target is the whole
+  // slot rather than the rectangle itself.
+  const probe = hoverProbe()
+  assert(probe.hit(0) !== undefined, 'column 0 has no hit area')
+  assert(probe.hit(1) !== undefined, 'column 1 has no hit area')
+  assert(probe.elements.some((el) => el.key === 'hit-2') === false, 'invented a hit area for a column that does not exist')
+  const count = probe.elements.filter((el) => typeof el.key === 'string' && el.key.startsWith('hit-')).length
+  assertEqual(count, 2, `one hit area per column, got ${count}`)
+})
+
+test('no tooltip is rendered until a column is hovered', () => {
+  const probe = hoverProbe()
+  assert(!probe.html.includes('tkd_tip'), `a tooltip rendered uninvited: ${probe.html.slice(0, 400)}`)
+})
+
+test('hovering a column shows its label and every segment figure', () => {
+  const probe = hoverProbe()
+  probe.fire(0, 'onMouseEnter')
+  const html = probe.html
+  assert(html.includes('class="tkd_tip"'), 'no tooltip after hovering')
+  assert(html.includes('>10-15<'), `the day label is missing: ${html.slice(-1500)}`)
+  // The four segment values, exact rather than abbreviated.
+  for (const value of ['1,000', '500', '8,000']) {
+    assert(html.includes(value), `segment figure ${value} missing from the tooltip`)
+  }
+  assert(html.includes('chart.tipTotal'), 'the tooltip has no total row')
+  assert(html.includes('>9,500<'), `the column total is missing: ${html.slice(-1500)}`)
+})
+
+test('the tooltip follows the pointer from one column to the next', () => {
+  const probe = hoverProbe()
+  probe.fire(0, 'onMouseEnter')
+  assert(probe.html.includes('>9,500<'), 'column 0 total missing')
+  probe.fire(1, 'onMouseEnter')
+  assert(probe.html.includes('>14,300<'), `column 1 total missing: ${probe.html.slice(-1500)}`)
+  assert(!probe.html.includes('>9,500<'), 'the previous column is still on screen')
+})
+
+test('leaving a column hides its tooltip', () => {
+  const probe = hoverProbe()
+  probe.fire(0, 'onMouseEnter')
+  assert(probe.html.includes('tkd_tip'), 'no tooltip to hide')
+  probe.fire(0, 'onMouseLeave')
+  assert(!probe.html.includes('tkd_tip'), `the tooltip outlived the pointer: ${probe.html.slice(-1200)}`)
+})
+
+test('the hovered column is marked with a track', () => {
+  // A day whose bar is a hairline still has to look selected.
+  const probe = hoverProbe()
+  assert(!probe.html.includes('tkd_trackOn'), 'a column was marked before any hover')
+  probe.fire(0, 'onMouseEnter')
+  assertEqual(countClass(probe.html, 'tkd_trackOn'), 1, 'exactly one column should be marked')
+  probe.fire(1, 'onMouseEnter')
+  assertEqual(countClass(probe.html, 'tkd_trackOn'), 1, 'the mark should move, not accumulate')
+})
+
+test('the tooltip reports a bucketed column as a multi-day total', () => {
+  // Beyond 30 days the chart buckets by week; the tooltip must say so rather
+  // than presenting a week's figure as one day's.
+  const state = ready()
+  state.page.data.days = []
+  for (let i = 0; i < 60; i += 1) {
+    state.page.data.days.push({
+      day: `2026-01-${String((i % 28) + 1).padStart(2, '0')}`,
+      inputTokens: 10, outputTokens: 5, cacheReadTokens: 100,
+      requests: 1, totalTokens: 115,
+    })
+  }
+  const interactive = makeInteractiveReact()
+  const bundle = loadBundle(interactive.react)
+  let shown = interactive.render(React.createElement(bundle.DashboardPage, { source: sourceStub(state), t }))
+  const hit = shown.elements.find((el) => el.key === 'hit-0')
+  assert(hit !== undefined, 'the bucketed chart has no hit area')
+  hit.props.onMouseEnter()
+  shown = interactive.render(React.createElement(bundle.DashboardPage, { source: sourceStub(state), t }))
+  assert(shown.html.includes('chart.tipDays'), `a bucketed column must be labelled as such: ${shown.html.slice(-1500)}`)
+})
+
+test('a column with no tokens still yields a tooltip rather than nothing', () => {
+  // A recorded day with no reported usage: the bar is zero-height, but the day
+  // exists and the reader may ask about it.
+  const state = ready()
+  state.page.data.days = [{ day: '2026-10-15', inputTokens: 0, outputTokens: 0, requests: 1, totalTokens: 0 }]
+  const interactive = makeInteractiveReact()
+  const bundle = loadBundle(interactive.react)
+  let shown = interactive.render(React.createElement(bundle.DashboardPage, { source: sourceStub(state), t }))
+  const hit = shown.elements.find((el) => el.key === 'hit-0')
+  assert(hit !== undefined, 'a zero day has no hit area')
+  hit.props.onMouseEnter()
+  shown = interactive.render(React.createElement(bundle.DashboardPage, { source: sourceStub(state), t }))
+  assert(shown.html.includes('class="tkd_tip"'), 'hovering a zero day should still explain it')
+  assert(shown.html.includes('>0<'), 'the zero total should be shown, not omitted')
+})
+
+test('the tooltip is pulled inward rather than hanging off an edge column', () => {
+  // The tooltip is centred on its column, so the first and last columns would
+  // push it past the plot edge. It is clamped instead. The column centres come
+  // from the chart's own hit rects, so this does not re-derive the layout.
+  const state = ready()
+  state.page.data.days = []
+  for (let i = 0; i < 30; i += 1) {
+    state.page.data.days.push({
+      day: `2026-09-${String(i + 1).padStart(2, '0')}`,
+      inputTokens: 10, outputTokens: 5, cacheReadTokens: 100, requests: 1, totalTokens: 115,
+    })
+  }
+  const interactive = makeInteractiveReact()
+  const bundle = loadBundle(interactive.react)
+  const draw = () => interactive.render(React.createElement(bundle.DashboardPage, { source: sourceStub(state), t }))
+  let shown = draw()
+  const hitCount = shown.elements.filter((el) => String(el.key).startsWith('hit-')).length
+  assertEqual(hitCount, 30, 'expected one hit area per day')
+
+  const tipLeft = () => {
+    const tip = shown.elements.find((el) => el.props?.className === 'tkd_tip')
+    assert(tip !== undefined, 'no tooltip rendered')
+    return { left: Number.parseFloat(tip.props.style.left), width: Number.parseFloat(tip.props.style.top) }
+  }
+
+  for (const index of [0, 29]) {
+    const hit = shown.elements.find((el) => el.key === `hit-${index}`)
+    const centre = hit.props.x + hit.props.width / 2
+    hit.props.onMouseEnter()
+    shown = draw()
+    const { left } = tipLeft()
+    assert(!Number.isNaN(left), `column ${index} produced no position`)
+    assert(left >= 0 && left <= 1000, `column ${index} placed the tooltip at ${left}px, outside the plot`)
+    if (index === 0) assert(left > centre, `the first column should be pulled inward: left=${left} centre=${centre}`)
+    if (index === 29) assert(left < centre, `the last column should be pulled inward: left=${left} centre=${centre}`)
+  }
+})
+
+test('a middle column is centred on its own slot', () => {
+  const probe = hoverProbe()
+  probe.fire(0, 'onMouseEnter')
+  const tip = probe.elements.find((el) => el.props?.className === 'tkd_tip')
+  const hit = probe.elements.find((el) => el.key === 'hit-0')
+  assertEqual(Number.parseFloat(tip.props.style.left), hit.props.x + hit.props.width / 2,
+    'the tooltip should sit over the centre of its column')
+})
+
+test('the tooltip is positioned against the chart, not the page', () => {
+  // Regression: the tooltip was a SIBLING of the positioned chart box, so its
+  // `position:absolute` resolved against the nearest positioned ancestor further
+  // up the tree. It floated over the KPI cards above the chart rather than over
+  // the chart. It has to be a descendant of the box.
+  const probe = hoverProbe()
+  probe.fire(0, 'onMouseEnter')
+  const html = probe.html
+  const box = html.indexOf('class="tkd_chartBox"')
+  const tip = html.indexOf('class="tkd_tip"')
+  const legend = html.indexOf('class="tkd_legend"')
+  assert(box !== -1, 'no chart box')
+  assert(tip !== -1, 'no tooltip')
+  assert(legend !== -1, 'no legend')
+  assert(box < tip && tip < legend,
+    `the tooltip must sit inside the chart box, before the legend: box=${box} tip=${tip} legend=${legend}`)
+})
+
+test('the segment swatches in the tooltip match the legend', () => {
+  // Both are drawn from one declaration now; this pins the property that
+  // matters, which is that a tooltip row shows the same shade as the bar it
+  // describes.
+  const probe = hoverProbe()
+  probe.fire(0, 'onMouseEnter')
+  const html = probe.html
+  for (const swatch of ['tkd_swatchCache', 'tkd_swatchAlt', 'tkd_swatch']) {
+    assert(html.includes(swatch), `tooltip swatch ${swatch} is missing`)
+  }
 })
 
 ;(async () => {

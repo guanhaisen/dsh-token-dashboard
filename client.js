@@ -36,6 +36,15 @@ window.__ModuleLoader__.load({
     const TODAY_POLL_MS = 60_000
     /** How long the open dashboard may go stale. */
     const PAGE_POLL_MS = 30_000
+    /**
+     * Half the tooltip's maximum width, in pixels.
+     *
+     * The tooltip is centred on its column, so the first and last columns would
+     * push it past the plot edge; it is pulled inward by this much. Must match
+     * the `.tkd_tip` `max-width` (220px) in the stylesheet — a half-width that
+     * is smaller than the real one lets the tooltip overhang the edge.
+     */
+    const TIP_HALF_WIDTH = 110
 
     /** Ranges the page offers, in display order. */
     const RANGES = ['today', '7d', '30d', 'all']
@@ -73,7 +82,7 @@ window.__ModuleLoader__.load({
 .tkd_grid2{grid-template-columns:repeat(auto-fit,minmax(340px,1fr));align-items:start;gap:20px;display:grid}
 .tkd_card{border:.5px solid var(--dsw-alias-settings-card-stroke);border-radius:var(--dsw-radius-xl);background:var(--dsw-alias-settings-card-fill);flex-direction:column;gap:12px;padding:16px 20px;display:flex}
 .tkd_cardTitle{margin:0;font-size:14px;font-weight:500;line-height:20px}
-.tkd_chartBox{min-width:0;width:100%}
+.tkd_chartBox{min-width:0;width:100%;position:relative}
 .tkd_chart{width:100%;display:block;overflow:visible}
 /* One opacity per segment, shared by its bar and its legend swatch. They were
    two parallel ladders before, and they drifted: the legend promised a shade the
@@ -84,7 +93,28 @@ window.__ModuleLoader__.load({
 .tkd_barCache,.tkd_swatchCache{fill:var(--dsw-alias-state-business-primary);background:var(--dsw-alias-state-business-primary);opacity:var(--tkd-op-cache)}
 .tkd_barCacheWrite,.tkd_swatchCacheWrite{fill:var(--dsw-alias-state-business-primary);background:var(--dsw-alias-state-business-primary);opacity:var(--tkd-op-cacheWrite)}
 .tkd_axis{stroke:var(--dsw-alias-border-l2);stroke-width:1}
+/* Text and gridlines must not swallow the pointer: the column hit areas sit on
+   top of the plot and are what drive the tooltip. */
+.tkd_axis,.tkd_tick{pointer-events:none}
 .tkd_tick{fill:var(--dsw-alias-label-caption);font-size:10px}
+/* One full-height hit area per column, so the whole slot is hoverable rather
+   than only the (often thin) bar itself. */
+.tkd_hit{fill:transparent}
+.tkd_track{fill:transparent;pointer-events:none}
+.tkd_trackOn{fill:var(--dsw-alias-interactive-bg-hover)}
+/* The tooltip follows the shell's own: same background and text colour, so it
+   reads as the same surface as every other tooltip in the app.
+   The max-width is load-bearing, not cosmetic: the tooltip is centred on its
+   column and pulled inward at the edges using a fixed half-width, so the half
+   width has to be a real upper bound. The figures stay nowrap (a broken number
+   is unreadable) while a long label wraps instead of overflowing. */
+.tkd_tip{position:absolute;z-index:100;pointer-events:none;transform:translate(-50%,0);background:var(--dsw-alias-tooltip-bg);color:var(--dsw-static-neutral-bluish-00);border-radius:var(--dsw-radius-sm);box-shadow:var(--dsw-shadow-lv2);padding:7px 10px;font-size:12px;line-height:18px;max-width:220px}
+.tkd_tipTitle{font-weight:600;white-space:nowrap}
+.tkd_tipNote{opacity:.7;font-weight:400;margin-left:6px}
+.tkd_tipGrid{margin-top:5px;display:grid;grid-template-columns:auto auto;gap:2px 14px}
+.tkd_tipKey{align-items:center;gap:6px;display:flex;opacity:.85}
+.tkd_tipVal{text-align:right;font-variant-numeric:tabular-nums;font-weight:600;white-space:nowrap}
+.tkd_tipTotal{border-top:.5px solid rgba(255,255,255,.22);margin-top:5px;padding-top:5px;display:grid;grid-template-columns:auto auto;gap:2px 14px}
 .tkd_table{width:100%;border-collapse:collapse;font-size:13px}
 .tkd_table th{color:var(--dsw-alias-label-tertiary);text-align:right;font-weight:500;padding:6px 8px;border-bottom:.5px solid var(--dsw-alias-border-l2);font-size:12px;white-space:nowrap}
 .tkd_table thead th{position:sticky;top:0;background:var(--dsw-alias-settings-card-fill);z-index:1}
@@ -261,6 +291,25 @@ window.__ModuleLoader__.load({
       const rest = abs % 60
       return `UTC${sign}${hours}${rest === 0 ? '' : `:${String(rest).padStart(2, '0')}`}`
     }
+
+    /**
+     * The four stacked segments in stack order, bottom first.
+     *
+     * Declared once so the chart's tooltip and its legend cannot disagree about
+     * a segment's colour or name — the two drew them from separate literals
+     * before, and drifted.
+     */
+    const LEGEND = [
+      { key: 'cache', swatch: 'tkd_swatchCache', label: 'chart.cache' },
+      { key: 'cacheWrite', swatch: 'tkd_swatchCacheWrite', label: 'chart.cacheWrite' },
+      { key: 'in', swatch: 'tkd_swatchAlt', label: 'chart.input' },
+      { key: 'out', swatch: 'tkd_swatch', label: 'chart.output' },
+    ]
+
+    /** Swatch class per segment key. */
+    const LEGEND_SWATCH = Object.fromEntries(LEGEND.map((item) => [item.key, item.swatch]))
+    /** Locale key per segment key. */
+    const LEGEND_LABEL = Object.fromEntries(LEGEND.map((item) => [item.key, item.label]))
 
     /**
      * The stacked segments of one chart column, bottom to top.
@@ -674,11 +723,15 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * Stacked daily bar chart.
+     * Stacked daily bar chart, with a hover tooltip per column.
      *
      * The viewBox tracks the measured pixel width so the scale factor is 1: at
      * a fixed 1000-wide viewBox stretched to the panel, every glyph was scaled
      * by however wide the panel happened to be.
+     *
+     * Hover is tracked in React state rather than left to the browser's native
+     * `title`, because a native tooltip cannot show the four-segment breakdown
+     * and lags the pointer by about a second.
      * @param props - `{ days, t }`.
      */
     function Chart(props) {
@@ -686,6 +739,10 @@ window.__ModuleLoader__.load({
       const columns = bucketDays(days, 30)
       const peak = chartPeak(columns)
       const [boxRef, width] = useMeasuredWidth(1000)
+      // The index of the hovered column, or -1. Kept as an index (not an object)
+      // so a re-measure that rebuilds `columns` cannot leave stale figures on
+      // screen: the tooltip always reads the current column at that index.
+      const [hover, setHover] = React.useState(-1)
       const height = 190
       const padLeft = 52
       const padBottom = 22
@@ -711,11 +768,23 @@ window.__ModuleLoader__.load({
       }
 
       const bars = []
+      const tracks = []
+      const hits = []
       columns.forEach((column, index) => {
         const x = padLeft + slot * index + (slot - barWidth) / 2
         const total = columnTotal(column)
         const scaled = scaleMax > 0 ? (total / scaleMax) * plotHeight : 0
         const baseY = 8 + plotHeight
+        const active = index === hover
+        // A faint full-height track marks the hovered column, so a day whose bar
+        // is a hairline (or zero) is still visibly selected.
+        tracks.push(jsx('rect', {
+          className: active ? 'tkd_track tkd_trackOn' : 'tkd_track',
+          x: padLeft + slot * index,
+          y: 8,
+          width: slot,
+          height: plotHeight,
+        }, `track-${index}`))
         // Stack bottom-up so each segment sits on the one before it.
         let cursor = baseY
         for (const segment of columnSegments(column)) {
@@ -731,6 +800,17 @@ window.__ModuleLoader__.load({
             rx: 2,
           }, `${segment.key}-${index}`))
         }
+        // One hit area per column spanning the full slot and plot height, so the
+        // pointer does not have to find a narrow bar.
+        hits.push(jsx('rect', {
+          className: 'tkd_hit',
+          x: padLeft + slot * index,
+          y: 0,
+          width: slot,
+          height,
+          onMouseEnter: () => setHover(index),
+          onMouseLeave: () => setHover((current) => (current === index ? -1 : current)),
+        }, `hit-${index}`))
       })
 
       const ticks = []
@@ -766,29 +846,88 @@ window.__ModuleLoader__.load({
         return jsx('p', { className: 'tkd_note', children: t('chart.empty') })
       }
 
+      const hovered = hover >= 0 && hover < columns.length ? columns[hover] : undefined
+      // The tooltip is positioned against the hovered slot's centre, clamped so
+      // it cannot hang past either edge of the plot.
+      const tip = hovered === undefined ? null : (() => {
+        const centre = padLeft + slot * hover + slot / 2
+        const half = TIP_HALF_WIDTH
+        const left = Math.max(half, Math.min(width - half, centre))
+        const rows = columnSegments(hovered)
+          .map((segment) => ({
+            key: segment.key,
+            swatch: LEGEND_SWATCH[segment.key],
+            label: t(LEGEND_LABEL[segment.key]),
+            value: segment.value,
+          }))
+          .reverse()
+        return jsxs('div', {
+          className: 'tkd_tip',
+          // Anchored at the top of the plot, over the tall columns and clear of
+          // the day labels underneath: a bar-anchored tooltip sat on the x-axis
+          // label it belonged to, which read as though the label were wrong.
+          style: { left: `${left}px`, top: '6px' },
+          children: [
+            jsxs('div', {
+              children: [
+                jsx('span', { className: 'tkd_tipTitle', children: hovered.label }),
+                hovered.days > 1
+                  ? jsx('span', { className: 'tkd_tipNote', children: `· ${hovered.days} ${t('chart.tipDays')}` })
+                  : null,
+              ],
+            }),
+            jsx('div', {
+              className: 'tkd_tipGrid',
+              children: rows.flatMap((row) => [
+                jsxs('span', {
+                  className: 'tkd_tipKey',
+                  children: [
+                    jsx('span', { className: `tkd_swatch ${row.swatch}`, key: 's' }),
+                    jsx('span', { key: 'l', children: row.label }),
+                  ],
+                }, `${row.key}-k`),
+                jsx('span', { className: 'tkd_tipVal', children: formatInt(row.value) }, `${row.key}-v`),
+              ]),
+            }),
+            jsxs('div', {
+              className: 'tkd_tipTotal',
+              children: [
+                jsx('span', { className: 'tkd_tipKey', children: t('chart.tipTotal') }),
+                jsx('span', { className: 'tkd_tipVal', children: formatInt(columnTotal(hovered)) }),
+              ],
+            }),
+          ],
+        })
+      })()
+
       return jsxs('div', {
         children: [
-          jsx('div', {
+          jsxs('div', {
             className: 'tkd_chartBox',
             ref: boxRef,
-            children: jsxs('svg', {
-              className: 'tkd_chart',
-              width,
-              height,
-              viewBox: `0 0 ${width} ${height}`,
-              role: 'img',
-              'aria-label': t('chart.aria'),
-              children: [...ticks, ...bars, ...labels],
-            }),
+            // The tooltip is a CHILD of the positioned box, not a sibling: an
+            // absolutely positioned sibling resolves against the nearest
+            // positioned ancestor further up the tree, which put the tooltip
+            // over the KPI cards above the chart instead of over the chart.
+            children: [
+              jsxs('svg', {
+                className: 'tkd_chart',
+                width,
+                height,
+                viewBox: `0 0 ${width} ${height}`,
+                role: 'img',
+                'aria-label': t('chart.aria'),
+                // Hovering is inherently pointer-driven; the equivalent for a
+                // keyboard or screen reader is the by-day data itself, which the
+                // cards and tables already carry, so nothing here is focusable.
+                children: [...ticks, ...tracks, ...bars, ...labels, ...hits],
+              }),
+              tip,
+            ],
           }),
           jsx('div', {
             className: 'tkd_legend',
-            children: [
-              { key: 'cache', swatch: 'tkd_swatchCache', label: 'chart.cache' },
-              { key: 'cacheWrite', swatch: 'tkd_swatchCacheWrite', label: 'chart.cacheWrite' },
-              { key: 'in', swatch: 'tkd_swatchAlt', label: 'chart.input' },
-              { key: 'out', swatch: 'tkd_swatch', label: 'chart.output' },
-            ].map((item) => jsxs('span', {
+            children: LEGEND.map((item) => jsxs('span', {
               className: (segmentTotals[item.key] ?? 0) > 0 ? undefined : 'tkd_legendZero',
               children: [
                 jsx('span', { className: `tkd_swatch ${item.swatch}`, key: 's' }),
@@ -1119,7 +1258,9 @@ window.__ModuleLoader__.load({
       'chart.cache': '缓存读取',
       'chart.cacheWrite': '缓存写入',
       'chart.empty': '该区间内没有记录。',
-      'chart.aria': '每日 token 用量柱状图，自下而上依次为缓存读取、缓存写入、输入、输出',
+      'chart.aria': '每日 token 用量柱状图，自下而上依次为缓存读取、缓存写入、输入、输出；悬停某一天可看当天明细',
+      'chart.tipTotal': '合计',
+      'chart.tipDays': '天合计',
       'kpi.total': '总 token',
       'kpi.nonCached': '非缓存 token',
       'kpi.nonCachedHint': '未命中缓存的输入 + 输出',
@@ -1178,7 +1319,9 @@ window.__ModuleLoader__.load({
       'chart.cache': 'cache read',
       'chart.cacheWrite': 'cache write',
       'chart.empty': 'No records in this range.',
-      'chart.aria': 'Daily token usage bar chart, bottom to top: cache reads, cache writes, input, output',
+      'chart.aria': 'Daily token usage bar chart, bottom to top: cache reads, cache writes, input, output; hover a day for its detail',
+      'chart.tipTotal': 'Total',
+      'chart.tipDays': 'day bucket',
       'kpi.total': 'Total tokens',
       'kpi.nonCached': 'Non-cached tokens',
       'kpi.nonCachedHint': 'uncached input + output',
@@ -1291,6 +1434,7 @@ window.__ModuleLoader__.load({
       columnSegments,
       columnTotal,
       bucketDays,
+      TIP_HALF_WIDTH,
       CSS,
       zh,
       en,

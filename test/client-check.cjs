@@ -739,6 +739,29 @@ test('the chart no longer fixes its viewBox with a non-uniform stretch', () => {
   assert(!CSS.includes('.tkd_chart{width:100%;height:190px'), 'the chart must not pin its own height')
 })
 
+test('the tooltip half-width is a real bound on the tooltip', () => {
+  // The tooltip is centred on its column and pulled inward at the edges by a
+  // hard-coded half-width, so that constant has to be at least half the width
+  // the stylesheet allows. A smaller one lets the tooltip overhang the plot.
+  const { CSS, TIP_HALF_WIDTH } = bundle.exports.__internal
+  const match = /\.tkd_tip\{[^}]*max-width:(\d+)px/.exec(CSS)
+  assert(match !== null, 'the tooltip declares no max-width, so the clamp has no real bound')
+  const maxWidth = Number(match[1])
+  assert(TIP_HALF_WIDTH * 2 >= maxWidth,
+    `the clamp (${TIP_HALF_WIDTH}px half-width) is narrower than the tooltip's limit (${maxWidth}px)`)
+})
+
+test('the chart carries the tooltip hooks its tests drive', () => {
+  const { CSS } = bundle.exports.__internal
+  for (const rule of ['.tkd_tip{', '.tkd_hit{', '.tkd_track{', '.tkd_trackOn{']) {
+    assert(CSS.includes(rule), `the stylesheet is missing ${rule}`)
+  }
+  // Gridlines and tick labels must not intercept the pointer, or a hover over
+  // the lower part of a column would land on a gridline instead of the hit area.
+  assert(/\.tkd_axis,\.tkd_tick\{pointer-events:none\}/.test(CSS),
+    'gridlines and tick labels must not swallow the pointer')
+})
+
 test('the breakpoints are container queries, not viewport ones', () => {
   // The dashboard lives in a resizable main pane, so a wide window with a
   // narrow pane must still reflow. A `@media` breakpoint never fires there:
