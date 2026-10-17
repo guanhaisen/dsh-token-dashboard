@@ -132,6 +132,25 @@ window.__ModuleLoader__.load({
 .tkd_legend{align-items:center;gap:12px;color:var(--dsw-alias-label-tertiary);font-size:12px;display:flex;flex-wrap:wrap}
 .tkd_swatch{width:10px;height:10px;border-radius:2px;flex:none;display:inline-block}
 .tkd_legendZero{opacity:.45}
+/* Calendar heatmap. One square per day, shaded by the day's total against the
+   window's own quartiles, so the shades compare days inside the window rather
+   than pretending a fixed rate. Level 0 is "no record" and is drawn in the
+   lightest border tone instead of the accent, so an empty day and a light day
+   stay distinguishable. The shade is carried by fill-opacity, not opacity: the
+   hovered cell is outlined with a stroke, and a plain opacity would fade that
+   outline along with the fill. The legend swatch is an inline SVG using the
+   same class, so a swatch cannot promise a shade the grid does not draw. */
+.tkd_heat0{fill:var(--dsw-alias-border-l1)}
+.tkd_heat1{fill:var(--dsw-alias-state-business-primary);fill-opacity:.25}
+.tkd_heat2{fill:var(--dsw-alias-state-business-primary);fill-opacity:.48}
+.tkd_heat3{fill:var(--dsw-alias-state-business-primary);fill-opacity:.72}
+.tkd_heat4{fill:var(--dsw-alias-state-business-primary);fill-opacity:1}
+.tkd_heatOn{stroke:var(--dsw-alias-label-primary);stroke-width:1}
+.tkd_heatBox{min-width:0;width:100%;position:relative}
+.tkd_heatLegend{align-items:center;gap:4px;color:var(--dsw-alias-label-tertiary);font-size:12px;display:flex;flex-wrap:wrap}
+.tkd_heatGap{width:10px;flex:none}
+.tkd_cardHead{justify-content:space-between;align-items:baseline;gap:4px 12px;display:flex;flex-wrap:wrap}
+.tkd_cardNote{color:var(--dsw-alias-label-tertiary);font-variant-numeric:tabular-nums;font-size:12px;line-height:18px}
 /* Breakpoints are container queries, not viewport ones: this panel lives in a
    resizable main pane, so a wide window with a narrow pane must reflow too. */
 @container tkd (max-width:1080px){.tkd_kpiSecondaryRow{grid-template-columns:repeat(3,minmax(0,1fr))}}
@@ -411,6 +430,212 @@ window.__ModuleLoader__.load({
     /** Series the page indexes unconditionally; each must be an array. */
     const DASHBOARD_SERIES = ['days', 'models', 'purposes', 'projects', 'recent']
 
+    // ── calendar heatmap helpers ─────────────────────────────────────────────
+
+    /** Days a heatmap window covers: a year to the day, as the copied idiom is. */
+    const HEAT_WINDOW_DAYS = 365
+
+    /** Cell geometry, in CSS pixels. */
+    const HEAT_CELL = 13
+    const HEAT_GAP = 3
+    /** Widest pitch (cell plus gap) a column is allowed to take. */
+    const HEAT_STRIDE_MAX = 18
+    /**
+     * Width of the weekday gutter to the left of the grid.
+     *
+     * Wide enough for the longest localized name at the tick font size: `Mon`
+     * is about 21px at 10px, and a narrower gutter clips it at the panel edge
+     * (the first preview of this card did exactly that).
+     */
+    const HEAT_LABEL = 32
+    /** Band above the grid holding the month labels. */
+    const HEAT_HEAD = 18
+    /** Right padding, so the last column does not touch the card edge. */
+    const HEAT_PAD_RIGHT = 2
+    /** Rows of the grid: one per weekday, Monday first. */
+    const HEAT_ROWS = 7
+
+    /**
+     * Parse one `YYYY-MM-DD` key into UTC parts.
+     *
+     * The key is a calendar day, not an instant, so it is parsed as UTC and kept
+     * there: doing arithmetic in local time would shift a key by a day either
+     * side of midnight, and the whole point of the key is that the Host already
+     * decided which day a call belongs to.
+     * @param day - a day key.
+     * @returns `{ y, m, d, ms }`, or `undefined` when the key is unusable.
+     */
+    function parseDayKey(day) {
+      if (typeof day !== 'string') return undefined
+      const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(day)
+      if (match === null) return undefined
+      const y = Number(match[1])
+      const m = Number(match[2])
+      const d = Number(match[3])
+      const ms = Date.UTC(y, m - 1, d)
+      // Reject a key that does not survive the round trip: `2026-02-30` parses as
+      // 2 March, and rendering it under February would mislabel the column.
+      if (dayKeyOf(ms) !== day) return undefined
+      return { y, m, d, ms }
+    }
+
+    /** The `YYYY-MM-DD` key of one epoch-millisecond instant, in UTC. */
+    function dayKeyOf(ms) {
+      const date = new Date(ms)
+      const month = String(date.getUTCMonth() + 1).padStart(2, '0')
+      const d = String(date.getUTCDate()).padStart(2, '0')
+      return `${date.getUTCFullYear()}-${month}-${d}`
+    }
+
+    /**
+     * The five shades a cell can take, lightest first.
+     *
+     * Four steps rather than a continuous ramp: at 11px a reader cannot resolve
+     * more, and a quantized scale is what lets the legend name a level instead
+     * of hinting at a gradient.
+     */
+    const HEAT_LEVELS = ['tkd_heat0', 'tkd_heat1', 'tkd_heat2', 'tkd_heat3', 'tkd_heat4']
+
+    /**
+     * The bucket boundaries that give one window its five shades.
+     *
+     * Buckets are the window's own quartiles of the days that actually have
+     * tokens, not fixed thresholds. A fixed scale would draw every day of a
+     * light user at level 1 and every day of a heavy one at level 4; ranking
+     * inside the window is what makes the picture say "which days were heavier",
+     * which is the question a heatmap answers.
+     *
+     * Days with zero tokens are excluded from the quartiles on purpose: they
+     * have their own level (0, "nothing recorded") and would otherwise drag the
+     * low boundary to zero, flattening every real day into the top shade.
+     * @param days - the window's days, each `{ totalTokens }`.
+     * @returns `[low, mid, high]` ascending; empty when nothing to rank.
+     */
+    function heatBreaks(days) {
+      const values = (days ?? [])
+        .map((day) => day?.totalTokens)
+        .filter((value) => Number.isFinite(value) && value > 0)
+        .sort((a, b) => a - b)
+      if (values.length === 0) return []
+      const at = (fraction) => values[Math.min(values.length - 1, Math.floor(fraction * values.length))]
+      const breaks = [at(0.25), at(0.5), at(0.75)]
+      // A window where every day is identical yields three equal breaks; keeping
+      // them as-is puts every day at level 4, which overstates a flat workload.
+      // Collapsing to the median puts every day at level 2 instead — the honest
+      // reading of "all these days are typical for this window".
+      if (breaks[0] === breaks[2]) return [breaks[1]]
+      return breaks
+    }
+
+    /**
+     * Which of the five shades one day's total takes.
+     * @param total - the day's total tokens.
+     * @param breaks - boundaries from {@link heatBreaks}.
+     * @returns an index into {@link HEAT_LEVELS}.
+     */
+    function heatLevel(total, breaks) {
+      if (!Number.isFinite(total) || total <= 0) return 0
+      if (!Array.isArray(breaks) || breaks.length === 0) return 4
+      // A single collapsed boundary marks the flat window described above.
+      if (breaks.length === 1) return total >= breaks[0] ? 2 : 1
+      if (total <= breaks[0]) return 1
+      if (total <= breaks[1]) return 2
+      if (total <= breaks[2]) return 3
+      return 4
+    }
+
+    /**
+     * Lay one trailing window of days out as calendar columns.
+     *
+     * Columns are weeks, top to bottom Monday..Sunday, the way a contribution
+     * graph is read. The window ends on the Host's current day and starts
+     * `HEAT_WINDOW_DAYS - 1` days earlier, so it is exactly a year to the day.
+     *
+     * Every cell in the window is emitted whether or not the Host recorded it:
+     * an absent day in the middle of a year is a fact about the workload, and
+     * skipping it would compress the calendar and misstate the gaps.
+     * @param calendar - `{ day, totalTokens, requests }[]` from the Host.
+     * @param options - `{ now, utcOffsetMinutes?, windowDays? }`.
+     * @returns `{ columns, breaks, totals, levelOf }`, where `totals` carries the
+     *   window's token sum and its recorded-day count, and `levelOf` maps a day
+     *   key to its shade index.
+     */
+    function heatmapWindow(calendar, options = {}) {
+      const windowDays = Number.isFinite(options.windowDays) && options.windowDays > 0
+        ? Math.trunc(options.windowDays)
+        : HEAT_WINDOW_DAYS
+      const byDay = new Map()
+      let recordedDays = 0
+      let total = 0
+      for (const row of calendar ?? []) {
+        if (row === null || typeof row !== 'object') continue
+        if (typeof row.day !== 'string' || parseDayKey(row.day) === undefined) continue
+        const tokens = Number.isFinite(row.totalTokens) ? row.totalTokens : 0
+        byDay.set(row.day, { totalTokens: tokens, requests: Number.isFinite(row.requests) ? row.requests : 0 })
+        if (tokens > 0) recordedDays += 1
+        total += tokens
+      }
+      const nowMs = Number.isFinite(options.now) ? options.now : Date.now()
+      // The window ends on the day the Host calls today, which is cut at its own
+      // configured offset — not at UTC. Anchoring to the UTC day instead dropped
+      // today's records for the first eight hours of a UTC+8 day, because the
+      // UTC day was still yesterday while the Host had already started a new one.
+      const offset = Number.isFinite(options.utcOffsetMinutes) ? Math.trunc(options.utcOffsetMinutes) : 0
+      const end = parseDayKey(dayKeyOf(nowMs + offset * 60_000))
+      const endMs = end === undefined
+        ? Date.UTC(new Date(nowMs).getUTCFullYear(), new Date(nowMs).getUTCMonth(), new Date(nowMs).getUTCDate())
+        : end.ms
+      const startMs = endMs - (windowDays - 1) * 86_400_000
+      // Pad the front so the first column starts on a Monday: without it the
+      // rows would not line up with the weekday labels.
+      const startWeekday = (new Date(startMs).getUTCDay() + 6) % 7
+      const paddedStart = startMs - startWeekday * 86_400_000
+      const cellCount = Math.ceil((endMs - paddedStart) / 86_400_000) + 1
+
+      const window = []
+      // The grid is a whole number of weeks: the front is padded back to Monday
+      // and the tail is padded forward to Sunday, so every column has seven
+      // cells. Padding is marked `inside: false` and drawn as nothing — it is
+      // geometry, not a day, and painting it as "no record" would add up to six
+      // fake empty days to the right of today.
+      for (let offsetDays = 0; offsetDays < cellCount; offsetDays += 1) {
+        const ms = paddedStart + offsetDays * 86_400_000
+        const day = dayKeyOf(ms)
+        const inside = ms >= startMs && ms <= endMs
+        const recorded = byDay.get(day)
+        window.push({
+          day,
+          inside,
+          totalTokens: recorded?.totalTokens ?? 0,
+          requests: recorded?.requests ?? 0,
+        })
+      }
+      while (window.length % HEAT_ROWS !== 0) {
+        const last = window[window.length - 1]
+        window.push({
+          day: dayKeyOf(parseDayKey(last.day).ms + 86_400_000),
+          inside: false,
+          totalTokens: 0,
+          requests: 0,
+        })
+      }
+      const breaks = heatBreaks(window.filter((cell) => cell.inside))
+      const columns = []
+      for (let index = 0; index < window.length; index += HEAT_ROWS) {
+        columns.push(window.slice(index, index + HEAT_ROWS))
+      }
+      const levelOf = new Map()
+      for (const cell of window) {
+        if (cell.inside) levelOf.set(cell.day, heatLevel(cell.totalTokens, breaks))
+      }
+      return {
+        columns,
+        breaks,
+        totals: { totalTokens: total, recordedDays },
+        levelOf,
+      }
+    }
+
     /**
      * Normalize one payload into the shape the page renders, or `null`.
      *
@@ -431,6 +656,12 @@ window.__ModuleLoader__.load({
       const meta = value.meta
       return {
         ...value,
+        // `calendar` is the one series this page can do without: it is newer
+        // than the other five, and a Host that predates it answers without the
+        // key. Defaulting to an empty list keeps that Host renderable (the card
+        // then shows only the empty cells) instead of rejecting the whole
+        // payload over a series the rest of the page does not need.
+        calendar: Array.isArray(value.calendar) ? value.calendar : [],
         totals: totals !== null && typeof totals === 'object' && !Array.isArray(totals) ? totals : {},
         meta: meta !== null && typeof meta === 'object' && !Array.isArray(meta) ? meta : {},
       }
@@ -939,6 +1170,202 @@ window.__ModuleLoader__.load({
       })
     }
 
+    /** Weekday rows of the heatmap, top to bottom; indices are `(getUTCDay()+6)%7`. */
+    const HEAT_WEEKDAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun']
+
+    /**
+     * One month tick per column that starts a new month.
+     *
+     * A tick is drawn on the first column whose week contains the 1st, which is
+     * how a contribution graph labels months without a run of duplicate label
+     * collisions on weeks that straddle a boundary.
+     * @param columns - week columns, each seven cells of `{ day, inside }`.
+     * @returns `{ index, month }[]`, `month` being `1..12`.
+     */
+    function heatMonthTicks(columns) {
+      const ticks = []
+      let previous = null
+      ;(columns ?? []).forEach((column, index) => {
+        for (const cell of column ?? []) {
+          const parsed = cell?.inside ? parseDayKey(cell.day) : undefined
+          if (parsed === undefined || parsed.d !== 1) continue
+          if (previous === parsed.m) continue
+          previous = parsed.m
+          ticks.push({ index, month: parsed.m })
+          return
+        }
+      })
+      return ticks
+    }
+
+    /**
+     * The calendar heatmap: one square per day, one column per week.
+     *
+     * The window is a fixed trailing year, not the page's range, and the range
+     * control says so in the card's sub-line. A contribution graph answers
+     * "when was I busy" — which needs a stable window a reader can compare
+     * against week over week — whereas the bar chart above answers "how much in
+     * the range I picked". Letting the range drive both would leave the calendar
+     * with a single square under "Today" and a year's worth under "All".
+     * @param props - `{ calendar, meta, t }`.
+     */
+    function Heatmap(props) {
+      const { calendar, meta, t } = props
+      const [boxRef, width] = useMeasuredWidth(720)
+      const model = React.useMemo(() => heatmapWindow(calendar, {
+        now: meta?.now,
+        utcOffsetMinutes: meta?.utcOffsetMinutes,
+      }), [calendar, meta?.now, meta?.utcOffsetMinutes])
+      const [hover, setHover] = React.useState('')
+
+      if (model.totals.recordedDays === 0) {
+        return jsx('p', { className: 'tkd_note', children: t('heat.empty') })
+      }
+
+      const plotWidth = Math.max(HEAT_CELL, width - HEAT_LABEL - HEAT_PAD_RIGHT)
+      const columnWidth = plotWidth / Math.max(1, model.columns.length)
+      // A hairline between cells reads as a fence, not as separation, so the gap
+      // gives way before the cell does on a narrow pane, and the pitch is capped
+      // on a wide one. Both ends are deliberate: a fixed 3px gap against an 8px
+      // column dissolved the grid into hairlines at 520px, and letting 53
+      // columns stretch across a 1000px panel grew them into chunky blocks that
+      // read as a different chart. Cells stay 11-13px wherever there is room.
+      const stride = Math.min(columnWidth, HEAT_STRIDE_MAX)
+      const gap = Math.max(1, Math.min(HEAT_GAP, stride * 0.24))
+      const cell = Math.max(3, Math.min(HEAT_CELL, stride - gap))
+      const rowHeight = cell + gap
+      const gridHeightTotal = HEAT_HEAD + HEAT_ROWS * rowHeight - gap + 4
+      const plotLeft = HEAT_LABEL
+
+      const monthLabels = heatMonthTicks(model.columns).map((tick) => (
+        jsx('text', {
+          className: 'tkd_tick',
+          x: plotLeft + stride * tick.index,
+          y: 9,
+          children: t(`heat.month.${tick.month}`),
+        }, `month-${tick.index}`)
+      ))
+
+      const weekdayLabels = HEAT_WEEKDAYS.map((name, row) => (
+        jsx('text', {
+          className: 'tkd_tick',
+          x: plotLeft - 6,
+          y: HEAT_HEAD + row * rowHeight + cell - 1,
+          textAnchor: 'end',
+          children: t(`heat.day.${name}`),
+        }, `weekday-${row}`)
+      ))
+
+      const cells = []
+      model.columns.forEach((column, columnIndex) => {
+        column.forEach((cellData, rowIndex) => {
+          if (!cellData.inside) return
+          const level = model.levelOf.get(cellData.day) ?? 0
+          const className = HEAT_LEVELS[level]
+          cells.push(jsx('rect', {
+            className: hover === cellData.day ? `${className} tkd_heatOn` : className,
+            x: plotLeft + stride * columnIndex + (stride - cell) / 2,
+            y: HEAT_HEAD + rowIndex * rowHeight,
+            width: cell,
+            height: cell,
+            rx: 2,
+            onMouseEnter: () => setHover(cellData.day),
+            onMouseLeave: () => setHover((current) => (current === cellData.day ? '' : current)),
+          }, cellData.day))
+        })
+      })
+
+      const hovered = hover === '' ? undefined : model.columns
+        .flat()
+        .find((cellData) => cellData.inside && cellData.day === hover)
+      const tip = hovered === undefined ? null : (() => {
+        const weekday = HEAT_WEEKDAYS[(new Date(parseDayKey(hovered.day).ms).getUTCDay() + 6) % 7]
+        // Anchored to the top of the hovered week's column, like the bar chart's
+        // tooltip is anchored to its column. The alternative — one fixed corner
+        // for the whole card — would leave the tooltip up to a year of columns
+        // away from the cell it describes on a wide pane.
+        const columnIndex = model.columns.findIndex((column) => column.some((cellData) => cellData.day === hovered.day))
+        const centre = plotLeft + stride * columnIndex + stride / 2
+        const half = TIP_HALF_WIDTH
+        const left = Math.max(half, Math.min(width - half, centre))
+        return jsxs('div', {
+          className: 'tkd_tip',
+          style: { left: `${left}px`, top: '0px' },
+          children: [
+            jsxs('div', {
+              children: [
+                jsx('span', { className: 'tkd_tipTitle', children: hovered.day }),
+                jsx('span', { className: 'tkd_tipNote', children: `· ${t(`heat.day.${weekday}`)}` }),
+              ],
+            }),
+            jsx('div', {
+              className: 'tkd_tipGrid',
+              children: [
+                jsx('span', { className: 'tkd_tipKey', children: t('heat.total') }, 'k'),
+                jsx('span', { className: 'tkd_tipVal', children: formatInt(hovered.totalTokens) }, 'v'),
+                jsx('span', { className: 'tkd_tipKey', children: t('col.requests') }, 'rk'),
+                jsx('span', { className: 'tkd_tipVal', children: formatInt(hovered.requests) }, 'rv'),
+              ],
+            }),
+          ],
+        })
+      })()
+
+      const legend = jsxs('div', {
+        className: 'tkd_heatLegend',
+        children: [
+          jsx('span', { children: t('heat.less') }, 'less'),
+          ...HEAT_LEVELS.map((className, level) => jsx('svg', {
+            className: 'tkd_swatch',
+            width: 10,
+            height: 10,
+            // An inline <svg>, not a <span>: the very same fill classes the grid
+            // uses carry the swatch's shade. A span would need a parallel set of
+            // background rules, and this project has already had two colour
+            // ladders drift apart once.
+            viewBox: '0 0 10 10',
+            'aria-hidden': 'true',
+            children: jsx('rect', { className: className, width: 10, height: 10, rx: 2 }),
+          }, `level-${level}`)),
+          jsx('span', { children: t('heat.more') }, 'more'),
+          jsx('span', { className: 'tkd_heatGap' }, 'gap'),
+          jsxs('span', {
+            children: [
+              t('heat.window'),
+              ' · ',
+              template(t('heat.days'), { count: formatInt(model.totals.recordedDays) }),
+            ],
+          }, 'window'),
+        ],
+      })
+
+      return jsxs('div', {
+        children: [
+          jsxs('div', {
+            className: 'tkd_heatBox',
+            ref: boxRef,
+            children: [
+              jsxs('svg', {
+                className: 'tkd_chart',
+                width,
+                height: gridHeightTotal,
+                viewBox: `0 0 ${width} ${gridHeightTotal}`,
+                role: 'img',
+                'aria-label': t('heat.aria'),
+                children: [
+                  ...monthLabels,
+                  ...weekdayLabels,
+                  ...cells,
+                ],
+              }),
+              tip,
+            ],
+          }),
+          legend,
+        ],
+      })
+    }
+
     /**
      * One generic table.
      * @param props - `{ columns, rows, t }` where a column is
@@ -1131,6 +1558,22 @@ window.__ModuleLoader__.load({
                 jsx(Chart, { days: data.days, t }),
               ],
             }),
+            jsxs('section', {
+              className: 'tkd_card',
+              children: [
+                jsxs('div', {
+                  className: 'tkd_cardHead',
+                  children: [
+                    jsx('h2', { className: 'tkd_cardTitle', children: t('heat.title') }),
+                    // The card states its own window: it is not the page's range,
+                    // and a reader who assumed it followed the range control would
+                    // read a year of history as a week of it.
+                    jsx('span', { className: 'tkd_cardNote', children: t('heat.subtitle') }),
+                  ],
+                }),
+                jsx(Heatmap, { calendar: data.calendar, meta, t }),
+              ],
+            }),
             jsx(TableCard, {
               title: t('table.models'),
               t,
@@ -1261,6 +1704,34 @@ window.__ModuleLoader__.load({
       'chart.aria': '每日 token 用量柱状图，自下而上依次为缓存读取、缓存写入、输入、输出；悬停某一天可看当天明细',
       'chart.tipTotal': '合计',
       'chart.tipDays': '天合计',
+      'heat.title': '用量日历',
+      'heat.subtitle': '近一年，与上方区间无关',
+      'heat.total': '合计',
+      'heat.less': '少',
+      'heat.more': '多',
+      'heat.window': '近一年',
+      'heat.days': '记录到 {count} 天',
+      'heat.empty': '近一年内还没有记录。',
+      'heat.aria': '近一年每日 token 用量日历热力图，每格一天，颜色越深当天用量越大；悬停某天可看当天合计',
+      'heat.day.mon': '一',
+      'heat.day.tue': '二',
+      'heat.day.wed': '三',
+      'heat.day.thu': '四',
+      'heat.day.fri': '五',
+      'heat.day.sat': '六',
+      'heat.day.sun': '日',
+      'heat.month.1': '1月',
+      'heat.month.2': '2月',
+      'heat.month.3': '3月',
+      'heat.month.4': '4月',
+      'heat.month.5': '5月',
+      'heat.month.6': '6月',
+      'heat.month.7': '7月',
+      'heat.month.8': '8月',
+      'heat.month.9': '9月',
+      'heat.month.10': '10月',
+      'heat.month.11': '11月',
+      'heat.month.12': '12月',
       'kpi.total': '总 token',
       'kpi.nonCached': '非缓存 token',
       'kpi.nonCachedHint': '未命中缓存的输入 + 输出',
@@ -1322,6 +1793,34 @@ window.__ModuleLoader__.load({
       'chart.aria': 'Daily token usage bar chart, bottom to top: cache reads, cache writes, input, output; hover a day for its detail',
       'chart.tipTotal': 'Total',
       'chart.tipDays': 'day bucket',
+      'heat.title': 'Usage calendar',
+      'heat.subtitle': 'last 12 months, independent of the range above',
+      'heat.total': 'Total',
+      'heat.less': 'less',
+      'heat.more': 'more',
+      'heat.window': 'last 12 months',
+      'heat.days': 'recorded on {count} days',
+      'heat.empty': 'Nothing recorded in the last 12 months.',
+      'heat.aria': 'Calendar heatmap of daily token usage over the last 12 months: one cell per day, darker for a heavier day; hover a day for its total',
+      'heat.day.mon': 'Mon',
+      'heat.day.tue': 'Tue',
+      'heat.day.wed': 'Wed',
+      'heat.day.thu': 'Thu',
+      'heat.day.fri': 'Fri',
+      'heat.day.sat': 'Sat',
+      'heat.day.sun': 'Sun',
+      'heat.month.1': 'Jan',
+      'heat.month.2': 'Feb',
+      'heat.month.3': 'Mar',
+      'heat.month.4': 'Apr',
+      'heat.month.5': 'May',
+      'heat.month.6': 'Jun',
+      'heat.month.7': 'Jul',
+      'heat.month.8': 'Aug',
+      'heat.month.9': 'Sep',
+      'heat.month.10': 'Oct',
+      'heat.month.11': 'Nov',
+      'heat.month.12': 'Dec',
       'kpi.total': 'Total tokens',
       'kpi.nonCached': 'Non-cached tokens',
       'kpi.nonCachedHint': 'uncached input + output',
@@ -1414,6 +1913,7 @@ window.__ModuleLoader__.load({
     exports.createSource = createSource
     exports.FooterTokenButton = FooterTokenButton
     exports.DashboardPage = DashboardPage
+    exports.Heatmap = Heatmap
 
     /** Test seam: pure helpers, exercised by test/client-check.cjs. */
     exports.__internal = {
@@ -1434,6 +1934,14 @@ window.__ModuleLoader__.load({
       columnSegments,
       columnTotal,
       bucketDays,
+      parseDayKey,
+      dayKeyOf,
+      heatBreaks,
+      heatLevel,
+      heatmapWindow,
+      heatMonthTicks,
+      HEAT_LEVELS,
+      HEAT_WINDOW_DAYS,
       TIP_HALF_WIDTH,
       CSS,
       zh,

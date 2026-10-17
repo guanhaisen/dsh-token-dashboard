@@ -163,6 +163,29 @@ async function main() {
     assertEqual(value.purposes[0].key, 'chat')
   })
 
+  test('a recorded call reaches the calendar series too', async () => {
+    // The calendar is built from the whole ledger rather than from the selected
+    // days, so it has to be walked end to end: a call recorded now must land on
+    // today's square under every range, including one that selects nothing.
+    const home = tempHome()
+    const { ctx, listeners, routes } = makeCtx(home)
+    mod.apply(ctx, mod.DEFAULTS)
+    const stream = listeners.find((l) => l.event === 'llm/stream').listener
+    await callModel(stream, { provider: 'p', model: 'm' }, [
+      { type: 'usage', usage: { inputTokens: 10, outputTokens: 5, cacheReadTokens: 100 } },
+      { type: 'finish', reason: { kind: 'stop' } },
+    ])
+    const today = mod.__internal.dayKey(Date.now(), mod.DEFAULTS.utcOffsetMinutes)
+    for (const range of ['today', '7d', '30d', 'all']) {
+      const result = await query(routes[0], range)
+      const value = result.value
+      const row = value.calendar.find((entry) => entry.day === today)
+      assert(row !== undefined, `${range}: today is missing from the calendar`)
+      assertEqual(row.totalTokens, 115, `${range}: calendar total`)
+      assertEqual(row.requests, 1, `${range}: calendar requests`)
+    }
+  })
+
   test('the session cwd is recorded when the session is live', async () => {
     const home = tempHome()
     const { ctx, listeners, routes } = makeCtx(home)

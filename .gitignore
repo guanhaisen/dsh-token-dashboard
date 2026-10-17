@@ -7,3 +7,6 @@ node_modules/
 Thumbs.db
 *.swp
 *~
+
+# Scratch space for local previews and one-off scripts.
+.tmp/

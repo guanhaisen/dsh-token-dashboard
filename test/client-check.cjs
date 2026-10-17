@@ -641,7 +641,155 @@ test('a bucketed column reports how many days it covers', () => {
   assert(columns[0].days >= 2, 'expected a multi-day bucket')
 })
 
-group('client: axis ticks')
+group('client: calendar heatmap')
+
+/** A day key `offset` days after `2026-10-17`. */
+function dayAt(offset) {
+  return new Date(Date.UTC(2026, 9, 17) + offset * 86_400_000).toISOString().slice(0, 10)
+}
+
+test('a day key parses as a calendar day and round-trips', () => {
+  const { parseDayKey, dayKeyOf } = bundle.exports.__internal
+  assertEqual(parseDayKey('2026-10-17'), { y: 2026, m: 10, d: 17, ms: Date.UTC(2026, 9, 17) })
+  assertEqual(dayKeyOf(Date.UTC(2026, 0, 1)), '2026-01-01')
+})
+
+test('a key that is not a real calendar day is rejected, not rolled over', () => {
+  // `2026-02-30` would otherwise parse as 2 March and be drawn under February.
+  const { parseDayKey } = bundle.exports.__internal
+  for (const bad of ['2026-02-30', '2026-13-01', '2026-1-1', 'nope', '', null, 42]) {
+    assertEqual(parseDayKey(bad), undefined, `${JSON.stringify(bad)} should be rejected`)
+  }
+})
+
+test('the window is a year ending on the Host\'s current day', () => {
+  // Not the UTC day: a UTC+8 Host has already started a new day at 16:00 UTC,
+  // and anchoring to UTC would drop today's records for the first eight hours.
+  const { heatmapWindow } = bundle.exports.__internal
+  const now = Date.UTC(2026, 9, 17, 2, 0, 0)
+  const model = heatmapWindow([], { now, utcOffsetMinutes: 480 })
+  const flat = model.columns.flat().filter((cell) => cell.inside)
+  assertEqual(flat.length, 365, 'a year to the day')
+  assertEqual(flat[flat.length - 1].day, '2026-10-17', 'the window must end on the Host day')
+  assertEqual(flat[0].day, '2025-10-18', 'and start a year earlier')
+})
+
+test('the first column starts on a Monday', () => {
+  // Without the front padding the weekday rows would not line up with the labels.
+  const { heatmapWindow } = bundle.exports.__internal
+  const model = bundle.exports.__internal.heatmapWindow([], {
+    now: Date.UTC(2026, 9, 17, 2), utcOffsetMinutes: 480,
+  })
+  const first = model.columns[0][0]
+  assertEqual(new Date(`${first.day}T00:00:00Z`).getUTCDay(), 1, `first column starts ${first.day}`)
+  for (const column of model.columns) {
+    assertEqual(column.length, 7, 'every column is a full week')
+  }
+})
+
+test('a padding cell is outside the window and carries no level', () => {
+  const { heatmapWindow } = bundle.exports.__internal
+  const model = bundle.exports.__internal.heatmapWindow([], {
+    now: Date.UTC(2026, 9, 17, 2), utcOffsetMinutes: 480,
+  })
+  const padding = model.columns.flat().filter((cell) => !cell.inside)
+  assert(padding.length > 0, 'the window should need padding')
+  for (const cell of padding) assertEqual(model.levelOf.has(cell.day), false)
+})
+
+test('the grid is padded to a whole number of weeks', () => {
+  // A trailing partial week would render six cells beside seven-cell neighbours,
+  // with the `Sat`/`Sun` rows simply missing from it.
+  const { heatmapWindow } = bundle.exports.__internal
+  for (const day of [1, 5, 12, 17, 28]) {
+    const model = heatmapWindow([], { now: Date.UTC(2026, 9, day, 2), utcOffsetMinutes: 480 })
+    for (const column of model.columns) {
+      assertEqual(column.length, 7, `2026-10-${day}: a short column`)
+    }
+    const last = model.columns[model.columns.length - 1][6]
+    assertEqual(new Date(`${last.day}T00:00:00Z`).getUTCDay(), 0,
+      `2026-10-${day}: the last column must end on a Sunday`)
+  }
+})
+
+test('every day in the window is emitted, recorded or not', () => {
+  // Gaps are the point of a calendar: skipping an absent day would compress the
+  // year and misstate the gaps.
+  const { heatmapWindow } = bundle.exports.__internal
+  const model = bundle.exports.__internal.heatmapWindow([{ day: dayAt(0), totalTokens: 5, requests: 1 }], {
+    now: Date.UTC(2026, 9, 17, 2), utcOffsetMinutes: 480,
+  })
+  assertEqual(model.columns.flat().filter((cell) => cell.inside).length, 365)
+  assertEqual(model.totals.recordedDays, 1)
+})
+
+test('a malformed calendar row is skipped rather than breaking the window', () => {
+  const { heatmapWindow } = bundle.exports.__internal
+  const model = heatmapWindow([
+    null, 'nope', { day: 'bad' }, { day: '2026-02-30', totalTokens: 9 },
+    { day: dayAt(0), totalTokens: 7, requests: 2 },
+  ], { now: Date.UTC(2026, 9, 17, 2), utcOffsetMinutes: 480 })
+  assertEqual(model.totals.totalTokens, 7)
+  assertEqual(model.totals.recordedDays, 1)
+})
+
+test('shades rank the window\'s own days instead of a fixed rate', () => {
+  // Fixed thresholds would draw every day of a light user at level 1 and every
+  // day of a heavy one at level 4, which says nothing about which days differed.
+  const { heatBreaks, heatLevel } = bundle.exports.__internal
+  const days = [1, 2, 3, 4, 5, 6, 7, 8].map((tokens) => ({ totalTokens: tokens * 100 }))
+  const breaks = heatBreaks(days)
+  assertEqual(breaks.length, 3, 'three boundaries give the five shades')
+  assertEqual(heatLevel(0, breaks), 0)
+  assertEqual(heatLevel(100, breaks), 1)
+  assertEqual(heatLevel(800, breaks), 4)
+})
+
+test('zero days do not drag the low boundary to zero', () => {
+  // Including them would flatten every real day into the top shade.
+  const { heatBreaks, heatLevel } = bundle.exports.__internal
+  const days = [{ totalTokens: 0 }, { totalTokens: 0 }, { totalTokens: 0 }]
+    .concat([1000, 2000, 3000, 4000].map((totalTokens) => ({ totalTokens })))
+  const breaks = heatBreaks(days)
+  assert(breaks[0] > 0, `the low boundary collapsed to ${breaks[0]}`)
+  assertEqual(heatLevel(0, breaks), 0, 'a zero day still has its own level')
+  assertEqual(heatLevel(1000, breaks), 1)
+})
+
+test('a flat window lands on the middle shade, not the top one', () => {
+  const { heatBreaks, heatLevel } = bundle.exports.__internal
+  const breaks = heatBreaks([500, 500, 500, 500].map((totalTokens) => ({ totalTokens })))
+  for (const total of [500, 900]) {
+    assertEqual(heatLevel(total, breaks), 2, `a flat window should read as typical, got ${heatLevel(total, breaks)}`)
+  }
+})
+
+test('an unranked window puts every recorded day at the top shade', () => {
+  const { heatLevel } = bundle.exports.__internal
+  assertEqual(heatLevel(5, []), 4)
+})
+
+test('a year of random totals uses the full shade range', () => {
+  const { heatmapWindow } = bundle.exports.__internal
+  const calendar = []
+  for (let i = 0; i < 365; i += 1) {
+    calendar.push({ day: dayAt(-i), totalTokens: (i * 7919) % 100_000, requests: 1 })
+  }
+  const model = heatmapWindow(calendar, { now: Date.UTC(2026, 9, 17, 2), utcOffsetMinutes: 480 })
+  const used = new Set([...model.levelOf.values()])
+  assertEqual([...used].filter((level) => level > 0).sort(), [1, 2, 3, 4], 'every non-empty shade should be reachable')
+})
+
+test('every month of the window is labelled exactly once', () => {
+  const { heatmapWindow, heatMonthTicks } = bundle.exports.__internal
+  const model = heatmapWindow([], { now: Date.UTC(2026, 9, 17, 2), utcOffsetMinutes: 480 })
+  const ticks = heatMonthTicks(model.columns)
+  assert(ticks.length >= 12, `expected a label per month, got ${ticks.length}`)
+  assertEqual(new Set(ticks.map((tick) => tick.month)).size, ticks.length, 'a month was labelled twice')
+  for (const tick of ticks) {
+    assert(tick.index >= 0 && tick.index < model.columns.length, `tick ${tick.index} is off the grid`)
+  }
+})
 
 test('the axis step rounds up to a nice number', () => {
   const { niceStep } = bundle.exports.__internal
@@ -762,6 +910,21 @@ test('the chart carries the tooltip hooks its tests drive', () => {
     'gridlines and tick labels must not swallow the pointer')
 })
 
+test('the heatmap shades are one ladder, shared by the grid and its legend', () => {
+  // The legend swatch is an inline <svg> carrying the same class as a grid cell,
+  // so the two cannot promise different shades. `fill-opacity` rather than
+  // `opacity` is what leaves the hover stroke at full strength.
+  const { CSS, HEAT_LEVELS } = bundle.exports.__internal
+  assertEqual(HEAT_LEVELS.length, 5, 'five shades, the empty one included')
+  for (const className of HEAT_LEVELS) {
+    const rule = new RegExp(`\\.${className}\\{fill:`)
+    assert(rule.test(CSS), `${className} declares no fill`)
+  }
+  assert(/\.tkd_heat4\{[^}]*fill-opacity:1\}/.test(CSS), 'the darkest shade must be the full accent')
+  assert(CSS.includes('.tkd_heatOn{stroke:'), 'the hover outline must be a stroke')
+  assert(!CSS.includes('.tkd_heatOn{opacity'), 'a hovered cell must keep its own shade')
+})
+
 test('the breakpoints are container queries, not viewport ones', () => {
   // The dashboard lives in a resizable main pane, so a wide window with a
   // narrow pane must still reflow. A `@media` breakpoint never fires there:
@@ -802,11 +965,41 @@ test('every key the page needs exists in both dictionaries', () => {
     'col.model', 'col.provider', 'col.total', 'col.input', 'col.output', 'col.cacheRead',
     'col.requests', 'col.ttft', 'col.project', 'col.purpose', 'col.time', 'col.duration', 'col.status',
     'status.ok', 'status.error', 'state.loading', 'state.error', 'state.empty', 'state.noConnection',
+    'heat.title', 'heat.subtitle', 'heat.total', 'heat.less', 'heat.more', 'heat.window',
+    'heat.days', 'heat.empty', 'heat.aria',
+    'heat.day.mon', 'heat.day.tue', 'heat.day.wed', 'heat.day.thu', 'heat.day.fri',
+    'heat.day.sat', 'heat.day.sun',
+    'heat.month.1', 'heat.month.2', 'heat.month.3', 'heat.month.4', 'heat.month.5', 'heat.month.6',
+    'heat.month.7', 'heat.month.8', 'heat.month.9', 'heat.month.10', 'heat.month.11', 'heat.month.12',
   ]
   for (const key of required) {
     assert(typeof zh[key] === 'string', `zh missing ${key}`)
     assert(typeof en[key] === 'string', `en missing ${key}`)
   }
+})
+
+test('every month and weekday the calendar can render has a label', () => {
+  // The grid indexes these keys by number, so a hole in the dictionary would
+  // surface as a missing label rather than as a fallback.
+  const { zh, en } = bundle.exports.__internal
+  for (const dict of [zh, en]) {
+    for (let month = 1; month <= 12; month += 1) {
+      assert(typeof dict[`heat.month.${month}`] === 'string', `missing heat.month.${month}`)
+    }
+    for (const day of ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun']) {
+      assert(typeof dict[`heat.day.${day}`] === 'string', `missing heat.day.${day}`)
+    }
+  }
+  // A month label is a month, not a number: `10` beside `Nov` would read as a day.
+  assert(!/^\d+$/.test(en['heat.month.10']), 'the month label should not be a bare number')
+})
+
+test('the calendar copy says the window is independent of the range', () => {
+  const { zh, en } = bundle.exports.__internal
+  assert(en['heat.subtitle'].toLowerCase().includes('independent'), 'en must state the window is fixed')
+  assert(zh['heat.subtitle'].includes('无关'), 'zh must state the window is fixed')
+  assert(zh['heat.days'].includes('{count}'), 'zh recorded-day count must interpolate')
+  assert(en['heat.days'].includes('{count}'), 'en recorded-day count must interpolate')
 })
 
 test('the footnote names all four chart segments and the day zone', () => {

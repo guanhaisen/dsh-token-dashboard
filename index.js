@@ -523,6 +523,20 @@ function buildDashboard(state, options) {
   })
   const purposes = subRows(dayList, 'purposes')
   const projects = subRows(dayList, 'projects').map((row) => ({ ...row, cwd: row.key }))
+  // Every recorded day, compact and independent of the selected range.
+  //
+  // The calendar heatmap is a fixed trailing window — the same idiom as a
+  // contribution graph — so it cannot be built from `days`: under a "Today"
+  // range that list holds one entry, and the card would be a single square.
+  // Only the two figures the card draws are sent, so a full retention window
+  // (730 days by default) stays around 40 KB rather than carrying a second
+  // copy of every derived breakdown.
+  const calendar = Object.keys(state.days)
+    .sort()
+    .map((day) => {
+      const view = derive(state.days[day])
+      return { day, totalTokens: view.totalTokens, requests: view.requests }
+    })
   // The detail list is filtered by day-key membership rather than by a
   // timestamp cutoff. A cutoff derived from `selected[0]` collapsed to 0
   // whenever the range selected no day at all, which let yesterday's calls
@@ -536,6 +550,7 @@ function buildDashboard(state, options) {
   return {
     range,
     days,
+    calendar,
     totals: summarize(dayList),
     models,
     purposes,

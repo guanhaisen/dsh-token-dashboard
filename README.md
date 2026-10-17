@@ -12,8 +12,9 @@ sidebar foot                    dashboard panel
 ┌──────────────────────┐        ┌──────────────────────────────────────┐
 │  📊 Token usage 12.3K │  ───▶  │  3 headline + 6 compact KPI cards     │
 ├──────────────────────┤        │  daily stacked bar chart              │
-│  G  Greye            │        │  by model, then project | purpose     │
-└──────────────────────┘        │  recent calls                         │
+│  G  Greye            │        │  usage calendar (a year of days)      │
+└──────────────────────┘        │  by model, then project | purpose     │
+                                │  recent calls                         │
                                 └──────────────────────────────────────┘
 ```
 
@@ -184,6 +185,41 @@ several days says so (`· 7 day bucket`) instead of passing a week's figure off 
 one day's. The tooltip is drawn from the same declaration as the legend, so a row
 and its swatch cannot disagree about a segment's colour.
 
+### The usage calendar
+
+Below the bar chart is a **calendar heatmap**: one square per day, one column per
+week, Monday to Sunday, shaded by that day's total. It answers a different
+question from the chart above it — *when* was I busy, rather than *how much* in
+the range I picked — so **it deliberately ignores the range control** and always
+shows the trailing year ending today. The card says so in its own sub-line, and
+the number of days that actually have records is printed beside the legend. A
+range-driven calendar would be a single square under "Today" and a year under
+"All", which is why it is pinned.
+
+- **Shades are the window's own quartiles**, not fixed token rates. A fixed scale
+  would paint every day of a light user at the palest shade and every day of a
+  heavy one at the darkest, which says nothing about which days differed. Days
+  with zero tokens are excluded from the quartiles and keep their own level
+  (the empty cell), so an idle day cannot drag the low boundary to zero and
+  flatten every real day into the darkest shade.
+- **A flat week reads as typical, not as maximal.** When every recorded day in
+  the window has the same total, the quartiles collapse; rather than painting all
+  of them at level 4, they land on the middle shade.
+- **The square is the same total the bar chart draws** — cache reads included —
+  so the two charts cannot disagree about what a day cost in tokens.
+- **Every day in the window is drawn, recorded or not.** Gaps are information;
+  skipping absent days would compress the year and misstate them.
+- **Hovering a square** shows the full date, its weekday, the exact total and the
+  request count. The hovered square keeps its own shade and gains an outline,
+  so the shade being explained is never hidden by the highlight.
+- The window ends on the day the Host calls today, cut at the same configurable
+  offset as the rest of the ledger — not at UTC, which would drop today's records
+  for the first eight hours of a UTC+8 day.
+
+The grid is sized by the pane, not by the window: the cell stays 11–13px while
+there is room and the gap shrinks first, so a narrow main pane still shows a year
+of squares rather than dissolving into hairlines.
+
 Other figures:
 
 - **Cache hit rate** = `cacheReadTokens / (inputTokens + cacheReadTokens)`. When
@@ -227,6 +263,12 @@ Other figures:
 - **Corruption is survivable.** A truncated, malformed, mis-schema'd or
   wrong-shaped file is treated as an empty ledger with one warning logged. The
   plugin keeps working and the dashboard shows its empty state.
+- **The calendar costs two fields per day on the wire.** It is built on the Host
+  from the whole ledger, not from the selected range, so the response carries a
+  `calendar` series of `{ day, totalTokens, requests }` — about 60 bytes a day,
+  roughly 45 KB across a full 730-day retention window. The card reads only those
+  two figures, so sending the full derived breakdown for a year would have been
+  ~20× larger for data nothing draws.
 - **To reset the data, delete the file.** There is no clear-data button by design.
 
 ## Configuration
@@ -302,17 +344,17 @@ test/              Zero-dependency test suite
 npm test          # or: node test/run-all.cjs
 ```
 
-279 assertions across seven files:
+316 assertions across seven files:
 
 | File | Covers |
 |---|---|
-| `ledger-check.cjs` | UTC+8 day boundary (one millisecond either side of midnight), bucket accumulation and clamping, derived figures, delta merging, retention, defensive parsing, payload assembly, **the recent table agreeing with the selected range**, **configuration values that cannot be used** |
+| `ledger-check.cjs` | UTC+8 day boundary (one millisecond either side of midnight), bucket accumulation and clamping, derived figures, delta merging, retention, defensive parsing, payload assembly, **the recent table agreeing with the selected range**, **the calendar series carrying every recorded day whatever the range and the same total the KPI card reports**, **configuration values that cannot be used** |
 | `store-check.cjs` | Debounced flush, atomic write, **reading the whole day back after a restart**, repeated reads not accumulating, **interleaved flushes from two stores losing no counts**, retention trimming, detail dedup and cap, write-failure and throwing-logger containment, **a failed write being retried on unload instead of dropping its delta** |
 | `recorder-check.cjs` | Chunks pass through unchanged (same object identity), laziness, exactly one record per call, errors rethrown unchanged, consumer abandonment, a throwing sink never reaching the model lane |
 | `route-check.cjs` | 405 / 415 / 400, envelope validation, rpcId echo, unknown method, a throwing store not escaping, all four ranges, the empty ledger |
-| `client-check.cjs` | Bundle load under a stub facade, slot registration and ordering, no-connection degradation, the source state machine, **a range switch superseding an in-flight read and aborting without an error state**, formatting, **the axis step rounding to a nice number and every tick printing at one precision**, chart bucketing, **cache-write parity between bar and card**, **the panel-width container queries and the absence of a viewport breakpoint**, **the tooltip's half-width being a real bound on the tooltip and the gridlines not swallowing the pointer**, **no dead stylesheet rule**, payload normalization, matching zh/en key sets |
-| `integration-check.cjs` | The real `apply()` end to end: one model call → ledger → read back through the route; cwd and purpose dimensions; a failed call counted as an error; flush on unload and continued counts on a second mount; **an existing ledger surviving a bad retention setting**; an aborted request |
-| `render-check.cjs` | Every branch of both components rendered: wide and rail states, loading/error/no-connection/empty states, **the KPI split into a 3-card headline row and a 6-card compact row with a sub-line on every card**, **a chart whose viewBox matches its rendered width and no `preserveAspectRatio` stretch**, **round axis ticks**, chart geometry and zero-height bars, **a bar scaled to the rounded axis top**, **a bar reaching the card's total with cache writes present**, **the project and purpose cards sharing a row**, **a long project path clipped with its full text kept in `title`**, **an unused segment dimmed in the legend but not dropped**, **chart hover driven through real component state: one hit area per column, no tooltip until a hover, the segment figures and total for the hovered day, the tooltip following the pointer column to column and hiding on leave, the tinted track marking exactly one column, a bucketed column labelled as multi-day, a zero-token day still explained, the tooltip clamped at both edges and centred on its slot, and the tooltip living inside the positioned chart box**, **a payload with no `totals` at all**, missing `meta`/`totals` not crashing, accessible names, the footnote's zone |
+| `client-check.cjs` | Bundle load under a stub facade, slot registration and ordering, no-connection degradation, the source state machine, **a range switch superseding an in-flight read and aborting without an error state**, formatting, **the axis step rounding to a nice number and every tick printing at one precision**, chart bucketing, **cache-write parity between bar and card**, **the panel-width container queries and the absence of a viewport breakpoint**, **the tooltip's half-width being a real bound on the tooltip and the gridlines not swallowing the pointer**, **the calendar window being a year to the day, ending on the Host's day rather than UTC's, padded to whole weeks, with quartile shades that ignore empty days and a flat window landing mid-scale**, **the five heat shades being one ladder shared by the grid and its legend**, **no dead stylesheet rule**, payload normalization, matching zh/en key sets and every month/weekday label the calendar indexes |
+| `integration-check.cjs` | The real `apply()` end to end: one model call → ledger → read back through the route; cwd and purpose dimensions; a failed call counted as an error; flush on unload and continued counts on a second mount; **a recorded call reaching the calendar series under all four ranges**; **an existing ledger surviving a bad retention setting**; an aborted request |
+| `render-check.cjs` | Every branch of both components rendered: wide and rail states, loading/error/no-connection/empty states, **the KPI split into a 3-card headline row and a 6-card compact row with a sub-line on every card**, **a chart whose viewBox matches its rendered width and no `preserveAspectRatio` stretch**, **round axis ticks**, chart geometry and zero-height bars, **a bar scaled to the rounded axis top**, **a bar reaching the card's total with cache writes present**, **the calendar card sitting between the chart and the tables, drawing one cell per day rather than per recorded day, starting on Monday with all seven weekday rows, keeping its window note, and staying a year wide under a one-day range**, **calendar hover through real component state: no tooltip until a hover, the date, weekday, exact total and request count of the hovered day, one outline that moves rather than accumulates and rides on top of the cell's shade, the tooltip inside the positioned box, and a payload with no `calendar` series still rendering**, **the project and purpose cards sharing a row**, **a long project path clipped with its full text kept in `title`**, **an unused segment dimmed in the legend but not dropped**, **chart hover driven through real component state**, **a payload with no `totals` at all**, missing `meta`/`totals` not crashing, accessible names, the footnote's zone |
 
 Every test seam is exported from the Host half as `__internal` and exercised
 directly.

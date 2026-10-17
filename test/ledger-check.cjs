@@ -500,6 +500,55 @@ async function main() {
     assertEqual(payload.recent.length, 2)
   })
 
+  group('ledger: the calendar series')
+
+  test('every recorded day is listed once, in order, whatever the range', () => {
+    // The calendar needs a year even when the page asks for one day, so it is
+    // built from the whole ledger rather than from `selectDays`.
+    const state = X.emptyState()
+    for (const [day, tokens] of [['2026-08-01', 3], ['2026-10-14', 2], ['2026-09-09', 1]]) {
+      const bucket = X.emptyBucket()
+      X.addRecord(bucket, { usageReported: true, inputTokens: tokens, outputTokens: 0, ok: true, purpose: 'chat' })
+      state.days[day] = bucket
+    }
+    const payload = X.buildDashboard(state, {
+      range: 'today',
+      now: Date.UTC(2026, 9, 14, 6, 0, 0),
+      utcOffsetMinutes: UTC8,
+      recentLimit: 10,
+    })
+    assertEqual(payload.calendar.map((row) => row.day), ['2026-08-01', '2026-09-09', '2026-10-14'])
+    assertEqual(payload.calendar.map((row) => row.totalTokens), [3, 1, 2])
+    // The range still governs the series it always did.
+    assertEqual(payload.days.length, 1)
+  })
+
+  test('a calendar row carries the same total the KPI card would report', () => {
+    // Cache reads are inside `totalTokens`, so the square the calendar shades is
+    // the figure the bar chart draws, not the non-cached remainder.
+    const state = X.emptyState()
+    const bucket = X.emptyBucket()
+    X.addRecord(bucket, {
+      usageReported: true,
+      inputTokens: 100, outputTokens: 50, cacheReadTokens: 900, cacheWriteTokens: 10,
+      requests: 1, ok: true, purpose: 'chat',
+    })
+    state.days['2026-10-14'] = bucket
+    const payload = X.buildDashboard(state, {
+      range: 'all', now: Date.UTC(2026, 9, 14, 6), utcOffsetMinutes: UTC8, recentLimit: 10,
+    })
+    assertEqual(payload.calendar[0].totalTokens, 1060)
+    assertEqual(payload.calendar[0].totalTokens, payload.days[0].totalTokens)
+    assertEqual(payload.calendar[0].requests, 1)
+  })
+
+  test('an empty ledger yields an empty calendar, not a missing key', () => {
+    const payload = X.buildDashboard(X.emptyState(), {
+      range: 'all', now: Date.UTC(2026, 9, 14, 6), utcOffsetMinutes: UTC8, recentLimit: 10,
+    })
+    assertEqual(payload.calendar, [])
+  })
+
   group('ledger: configuration is validated, never trusted')
 
   test('the defaults survive an absent or empty configuration', () => {

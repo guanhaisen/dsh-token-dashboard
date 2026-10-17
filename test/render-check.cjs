@@ -813,7 +813,204 @@ test('an unused chart segment is dimmed rather than dropped from the legend', ()
   assert(dimmed < 4, `only the unused segment may be dimmed, got ${dimmed}`)
 })
 
-group('render: chart hover tooltip')
+group('render: usage calendar')
+
+/** The payload `ready()` builds, plus a year of calendar days ending today. */
+function calendarState(extra = {}) {
+  const state = ready()
+  const now = Date.UTC(2026, 9, 17, 2, 0, 0)
+  state.page.data.meta = { ...state.page.data.meta, now, utcOffsetMinutes: 480 }
+  state.page.data.calendar = []
+  for (let offset = 0; offset < 120; offset += 1) {
+    state.page.data.calendar.push({
+      day: new Date(now - offset * 86_400_000).toISOString().slice(0, 10),
+      totalTokens: (offset + 1) * 1000,
+      requests: offset + 1,
+      ...extra,
+    })
+  }
+  return state
+}
+
+test('the calendar card renders below the bar chart', () => {
+  const html = render(React.createElement(DashboardPage, { source: sourceStub(calendarState()), t }))
+  assert(html.includes('heat.title'), `the calendar card is missing: ${html.slice(0, 500)}`)
+  const chart = html.indexOf('chart.title')
+  const heat = html.indexOf('heat.title')
+  const models = html.indexOf('table.models')
+  assert(chart !== -1 && heat !== -1, 'both cards must render')
+  assert(chart < heat && heat < models, `the calendar should sit between the chart and the tables: chart=${chart} heat=${heat} models=${models}`)
+})
+
+test('the calendar draws one cell per day of the window, not per recorded day', () => {
+  // A calendar with only the busy days on it is not a calendar.
+  const html = render(React.createElement(DashboardPage, { source: sourceStub(calendarState()), t }))
+  // Cells carry an x coordinate; the five legend swatches (also `tkd_heatN`
+  // rects) do not, so the attribute is what tells the grid from its key.
+  const cells = [...html.matchAll(/<rect class="tkd_heat[0-4]" x=/g)].length
+  assertEqual(cells, 365, `one cell per day of the trailing year, got ${cells}`)
+})
+
+test('the calendar starts each column on Monday and labels the weekdays', () => {
+  const html = render(React.createElement(DashboardPage, { source: sourceStub(calendarState()), t }))
+  for (const day of ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun']) {
+    assert(html.includes(`>heat.day.${day}<`), `weekday label ${day} is missing`)
+  }
+  // Every cell's y coordinate must be one of seven rows.
+  const ys = new Set([...html.matchAll(/<rect class="tkd_heat[0-4]" x="[\d.]+" y="([\d.]+)"/g)].map((m) => Number(m[1])))
+  assertEqual(ys.size, 7, `expected seven weekday rows, got ${ys.size}`)
+})
+
+test('the calendar keeps its card note explaining the window', () => {
+  const html = render(React.createElement(DashboardPage, { source: sourceStub(calendarState()), t }))
+  assert(html.includes('heat.subtitle'), 'the card must state that it ignores the range control')
+  assert(html.includes('class="tkd_cardNote"'), 'no sub-line for the window')
+})
+
+test('the calendar legend names all five shades', () => {
+  const html = render(React.createElement(DashboardPage, { source: sourceStub(calendarState()), t }))
+  for (const level of ['tkd_heat0', 'tkd_heat1', 'tkd_heat2', 'tkd_heat3', 'tkd_heat4']) {
+    assert(html.includes(level), `legend shade ${level} is missing`)
+  }
+  assert(html.includes('heat.less') && html.includes('heat.more'), 'the legend needs its less/more ends')
+})
+
+test('a day with no record is drawn in the empty shade, not as the accent', () => {
+  const html = render(React.createElement(DashboardPage, { source: sourceStub(calendarState()), t }))
+  assert(html.includes('tkd_heat0'), 'empty days need their own shade')
+})
+
+test('the calendar states how many days were recorded', () => {
+  const state = calendarState()
+  state.page.data.calendar = state.page.data.calendar.slice(0, 3)
+  const html = render(React.createElement(DashboardPage, { source: sourceStub(state), t: realT }))
+  assert(html.includes('recorded on 3 days'), `the recorded-day count is missing: ${html.slice(-900)}`)
+})
+
+test('a calendar with no recorded day shows its empty note', () => {
+  const state = calendarState()
+  state.page.data.calendar = []
+  // The page's own empty state keys off `days`/`recent`, so keep those populated
+  // to reach the card at all.
+  const html = render(React.createElement(DashboardPage, { source: sourceStub(state), t }))
+  assert(html.includes('heat.empty'), `expected the calendar empty note: ${html.slice(-900)}`)
+})
+
+test('a payload with no calendar series still renders the page', () => {
+  // The series is newer than the other five: a Host that predates it answers
+  // without the key, and that must not blank the dashboard.
+  const state = ready()
+  delete state.page.data.calendar
+  let html
+  let threw
+  try {
+    html = render(React.createElement(DashboardPage, { source: sourceStub(state), t }))
+  } catch (error) {
+    threw = error
+  }
+  assert(threw === undefined, `a missing calendar threw: ${threw && threw.message}`)
+  assert(html.includes('heat.title'), 'the card should still render')
+  assert(html.includes('heat.empty'), 'and say it has nothing to show')
+})
+
+test('the calendar is not driven by the range control', () => {
+  // Under "Today" the day list holds one entry, but the calendar still shows a
+  // year: it answers "when was I busy", not "how much did I use today".
+  const state = calendarState()
+  state.page.range = 'today'
+  state.page.data.days = state.page.data.days.slice(0, 1)
+  const html = render(React.createElement(DashboardPage, { source: sourceStub(state), t }))
+  assertEqual([...html.matchAll(/<rect class="tkd_heat[0-4]" x=/g)].length, 365,
+    'the calendar must stay a year wide under a one-day range')
+})
+
+group('render: usage calendar hover')
+
+/** Render the page with a stateful React and drive one calendar cell. */
+function heatProbe() {
+  const interactive = makeInteractiveReact()
+  const bundle = loadBundle(interactive.react)
+  const draw = () => interactive.render(React.createElement(bundle.DashboardPage, {
+    source: sourceStub(calendarState()), t,
+  }))
+  let shown = draw()
+  return {
+    get html() { return shown.html },
+    get elements() { return shown.elements },
+    cells() {
+      return shown.elements.filter((el) => /^tkd_heat[0-4]/.test(String(el.props?.className ?? '')))
+    },
+    /** Hover the cell for one day key and re-render. */
+    hover(day) {
+      const cell = shown.elements.find((el) => el.key === day)
+      assert(cell !== undefined, `no cell for ${day}`)
+      cell.props.onMouseEnter()
+      shown = draw()
+    },
+    leave(day) {
+      const cell = shown.elements.find((el) => el.key === day)
+      assert(cell !== undefined, `no cell for ${day}`)
+      cell.props.onMouseLeave()
+      shown = draw()
+    },
+  }
+}
+
+test('no calendar tooltip is rendered until a day is hovered', () => {
+  const probe = heatProbe()
+  assert(!probe.html.includes('class="tkd_tip"'), `a tooltip rendered uninvited: ${probe.html.slice(0, 400)}`)
+})
+
+test('hovering a day shows its date, weekday, total and requests', () => {
+  const probe = heatProbe()
+  probe.hover('2026-10-17')
+  const html = probe.html
+  assert(html.includes('class="tkd_tip"'), 'no tooltip after hovering a cell')
+  assert(html.includes('>2026-10-17<'), `the date is missing: ${html.slice(-900)}`)
+  assert(html.includes('>heat.day.sat<'), 'the weekday is missing')
+  assert(html.includes('>1,000<'), `the day total is missing: ${html.slice(-900)}`)
+  assert(html.includes('>1<'), 'the request count is missing')
+})
+
+test('the calendar tooltip hides when the pointer leaves', () => {
+  const probe = heatProbe()
+  probe.hover('2026-10-17')
+  assert(probe.html.includes('class="tkd_tip"'), 'no tooltip to hide')
+  probe.leave('2026-10-17')
+  assert(!probe.html.includes('class="tkd_tip"'), 'the tooltip outlived the pointer')
+})
+
+test('exactly one calendar cell is outlined while hovered', () => {
+  const probe = heatProbe()
+  assert(!probe.html.includes('tkd_heatOn'), 'a cell was outlined before any hover')
+  probe.hover('2026-10-17')
+  assertEqual(countClass(probe.html, 'tkd_heatOn'), 1, 'exactly one cell should be outlined')
+  probe.hover('2026-10-10')
+  assertEqual(countClass(probe.html, 'tkd_heatOn'), 1, 'the outline should move, not accumulate')
+})
+
+test('the hover outline rides on top of the cell\'s own shade', () => {
+  // The outline is a stroke on the same rect, so the cell keeps its fill class;
+  // replacing the class would erase the very shade being explained.
+  const probe = heatProbe()
+  probe.hover('2026-10-17')
+  const cell = probe.cells().find((el) => el.key === '2026-10-17')
+  assert(cell.props.className.includes('tkd_heatOn'), 'the hovered cell is not outlined')
+  assert(/tkd_heat[0-4]/.test(cell.props.className), `the hovered cell lost its shade: ${cell.props.className}`)
+})
+
+test('the calendar tooltip is positioned against the card, not the page', () => {
+  const probe = heatProbe()
+  probe.hover('2026-10-17')
+  const html = probe.html
+  const box = html.indexOf('class="tkd_heatBox"')
+  const tip = html.indexOf('class="tkd_tip"')
+  const legend = html.indexOf('class="tkd_heatLegend"')
+  assert(box !== -1 && tip !== -1 && legend !== -1, 'box, tooltip and legend must all render')
+  assert(box < tip && tip < legend, `the tooltip must live inside the positioned box: box=${box} tip=${tip}`)
+})
+
+
 
 /** A ready page whose days are known, so the tooltip's figures are predictable. */
 function chartState() {
