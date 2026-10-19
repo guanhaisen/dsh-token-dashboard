@@ -1,0 +1,51 @@
+/* Shell stand-ins for the preview page only.
+   The pane is sized by entry.jsx from the query string, which is what lets one
+   build stand in for a wide pane, a narrow one, and the sidebar's rail. */
+html, body {
+  margin: 0;
+  height: 100%;
+  background: var(--dsw-alias-bg-base);
+  color: var(--dsw-alias-label-primary);
+  font-family: var(--dsh-font-family-text-default, "PingFang SC", system-ui, sans-serif);
+  -webkit-font-smoothing: antialiased;
+}
+
+* { box-sizing: border-box; }
+
+#root { height: 100%; }
+
+#foot {
+  padding: 8px;
+  background: var(--dsw-alias-bg-layer-1);
+  border-top: .5px solid var(--dsw-alias-border-l2);
+}
+
+body[data-ds-dark-theme] { color-scheme: dark; }
+
+/* The shell's segmented control, drawn to the shell's own spec so the range
+   switch in the preview reads like the real one instead of like a mock. */
+.segmented {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: var(--dsw-radius-sm);
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+.segment {
+  border: none;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font: inherit;
+  font-size: 12px;
+  line-height: 18px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.segment:hover { color: var(--dsw-alias-label-primary); }
+.segmentOn {
+  background: var(--dsw-alias-bg-layer-1);
+  color: var(--dsw-alias-label-primary);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 8%), 0 0 0 .5px var(--dsw-alias-border-l3);
+}
