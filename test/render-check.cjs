@@ -359,11 +359,15 @@ test('the chart axis labels are non-empty', () => {
 })
 
 test('a null cache hit rate renders as an em dash, never a false zero', () => {
+  // The rate is a chip on the cache card's label line. Asserting on the chip
+  // rather than on the page: the composition legend legitimately prints 0.0%
+  // for a segment nothing was spent on, so a page-wide "no 0.0%" check would
+  // fail on a correct page.
   const state = ready()
   state.page.data.totals.cacheHitRate = null
   const html = render(React.createElement(DashboardPage, { source: sourceStub(state), t }))
-  assert(html.includes('—'), 'expected an em dash for an unknown rate')
-  assert(!html.includes('0.0%'), 'an unknown rate must not render as 0.0%')
+  assert(html.includes('class="tkd_trend">—</span>'), `expected an em dash for an unknown rate: ${html.slice(0, 900)}`)
+  assert(!html.includes('class="tkd_trend">0.0%<'), 'an unknown rate must not render as 0.0%')
 })
 
 test('a failed recent call is marked in the table', () => {
@@ -720,15 +724,32 @@ function countClass(html, className) {
   return [...html.matchAll(new RegExp(`class="[^"]*\\b${className}\\b[^"]*"`, 'g'))].length
 }
 
-test('the KPIs are split into a primary row of three and a secondary row of six', () => {
+test('the readings are split into a three-card headline row and a six-cell strip', () => {
   // Regression: one `auto-fit` grid of nine cards packed five to a row and left
   // the second row with four and an empty column, so the figures never lined up
-  // into a readable hierarchy.
+  // into a readable hierarchy. The headline row now leads with one hero card —
+  // the total, with its composition under it — and two companion readings.
   const html = render(React.createElement(DashboardPage, { source: sourceStub(ready()), t }))
   assert(html.includes('class="tkd_kpiPrimaryRow"'), 'no primary KPI row')
   assert(html.includes('class="tkd_kpiSecondaryRow"'), 'no secondary KPI row')
-  assertEqual(countClass(html, 'tkd_kpiPrimary'), 3, `primary cards: ${html.slice(0, 400)}`)
+  assertEqual(countClass(html, 'tkd_kpiHero'), 1, `exactly one hero card: ${html.slice(0, 400)}`)
+  assertEqual(countClass(html, 'tkd_kpiPrimary'), 2, 'two companion headline cards beside the hero')
   assertEqual(countClass(html, 'tkd_kpiSecondary'), 6, 'secondary cards')
+})
+
+test('the hero card carries the total the four segments add up to', () => {
+  // The composition bar is the headline figure taken apart: its four shares must
+  // be the four segments the chart stacks, so the two cannot describe different
+  // totals.
+  const html = render(React.createElement(DashboardPage, { source: sourceStub(ready()), t }))
+  assert(html.includes('class="tkd_comp"'), `no composition bar: ${html.slice(0, 900)}`)
+  for (const fill of ['tkd_compCache', 'tkd_compCacheWrite', 'tkd_compIn', 'tkd_compOut']) {
+    assert(html.includes(fill), `composition slice ${fill} is missing`)
+  }
+  // 3,000 total: 2,570 cache read, 300 input, 130 output.
+  assert(html.includes('>85.7%<'), `the cache share is missing: ${html.slice(0, 1400)}`)
+  assert(html.includes('>10.0%<'), 'the input share is missing')
+  assert(html.includes('>4.3%<'), 'the output share is missing')
 })
 
 test('every KPI card carries a sub-line, so a row cannot go ragged', () => {
@@ -781,16 +802,22 @@ test('the projects and purposes cards share a row', () => {
   assert(html.indexOf('table.models') < at, 'the model table should stay full width, above the grid')
 })
 
-test('a long project path is clipped and keeps its full text in the title', () => {
+test('a long project path leads with its folder name and keeps the full path', () => {
   // `white-space:nowrap` on the cell turned an unbreakable path into a
-  // horizontal scrollbar that pushed the numeric columns off screen.
+  // horizontal scrollbar that pushed the numeric columns off screen. A single
+  // clipped line was the other failure: every path in this column shares its
+  // first thirty characters, so the clip hid the only part that differed. The
+  // folder name now leads, the directory above it sits underneath, and the whole
+  // path stays in the cell's title.
   const long = 'D:\\VibeCoding\\Deepseek\\a-very-long-project-directory-name'
   const state = ready()
   state.page.data.projects = [{
     key: long, cwd: long, totalTokens: 100, nonCachedTokens: 10, requests: 1, cacheReadTokens: 90,
   }]
   const html = render(React.createElement(DashboardPage, { source: sourceStub(state), t }))
-  assert(html.includes('tkd_trunc'), `the path is not clipped: ${html.slice(0, 900)}`)
+  assert(html.includes('class="tkd_cellStack"'), `the path cell has no stacked layout: ${html.slice(0, 900)}`)
+  assert(html.includes('>a-very-long-project-directory-name<'), 'the folder name must lead the cell')
+  assert(html.includes('>D:\\VibeCoding\\Deepseek<'), 'the parent directory should sit underneath')
   assert(html.includes(`title="${long}"`), 'the full path must survive in the title')
 })
 

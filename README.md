@@ -140,6 +140,19 @@ Aggregated by **day** (boundary at UTC+8 by default), **model**, **purpose** and
 
 ## Reading the numbers
 
+The page is read top to bottom in four bands: the headline readings, the daily
+chart, the year calendar, and the rankings. The layout is a column container
+rather than a viewport breakpoint set, so a wide window with a narrow pane
+reflows too — the page is built for the pane it is given.
+
+### The headline band
+
+Three tinted surfaces over one compact strip of six cells. The first is the
+**hero**: the total, with its own composition bar underneath and the share each
+of the four segments holds. That bar is the chart above taken apart — same four
+segments, same ladder — so the headline figure also says what it was made of
+without a third chart.
+
 Two totals are shown, because one number cannot answer both questions:
 
 - **Total tokens** = `inputTokens + outputTokens + cacheReadTokens + cacheWriteTokens`.
@@ -161,11 +174,21 @@ Note that the provider's `inputTokens` means *uncached* input: DSH names the sam
 quantity `uncachedInputTokens` internally. That is why `inputTokens` alone is much
 smaller than the cache figure on a warm session.
 
-Both totals are always on screen, so neither has to be inferred. The daily chart
-stacks four segments — cache reads (bottom), cache writes, input, then output —
-so the bar's height is the same total the card reports. Cache is drawn lowest
-deliberately: at 99% of the bar it would otherwise push input and output off the
-top of the plot.
+The hero also carries a **period-over-period chip** on 7- and 30-day ranges. It
+is computed from the calendar series — the only series that holds every recorded
+day whatever the range is — so the comparison needs no second round trip. Up is
+not painted as bad and down is not painted as good: this is consumption, not a
+target, so the colour stays neutral and only the arrow carries direction. A
+previous period with nothing in it yields no percentage at all (dividing by it
+produced `Infinity%`) and says "new" instead.
+
+### The daily chart
+
+The chart stacks four segments — cache reads (bottom), cache writes, input, then
+output — so the bar's height is the same total the card reports. Cache is drawn
+lowest deliberately: at 99% of the bar it would otherwise push input and output
+off the top of the plot. The legend is a row of chips that carry each segment's
+total for the range, so the four parts are readable without hovering.
 
 The chart's vertical axis is scaled to round numbers rather than to the raw peak:
 the step is rounded up to a `1 / 2 / 2.5 / 5 / 10` value, so a 143M peak draws
@@ -174,6 +197,10 @@ gridlines at `0 / 50M / 100M / 150M / 200M` instead of
 top gridline, and the gridline it stops under is the number it is drawn against —
 the bars are scaled to the rounded axis top, not to the peak, so the bar and the
 label can never disagree.
+
+The column for the Host's own current day keeps a faint wash even when nothing is
+hovered: on a day still in progress its bar is the shortest of the range, and
+without the mark the last column reads as a collapse.
 
 **Hovering a bar shows that day's breakdown.** The tooltip lists all four
 segments at their exact values (not the compact `K`/`M` form the cards use) plus
@@ -220,6 +247,13 @@ The grid is sized by the pane, not by the window: the cell stays 11–13px while
 there is room and the gap shrinks first, so a narrow main pane still shows a year
 of squares rather than dissolving into hairlines.
 
+Beside the grid is a **rail of four readings** derived from the same series, so
+it can never disagree with the squares it annotates: the twelve-month total, the
+per-active-day average, the busiest day, and the current streak. They exist
+because a nearly empty year of squares is a poor answer on its own — five busy
+days look like an empty page. The rail drops below the grid on a narrow pane and
+is omitted entirely when there is nothing in the window.
+
 Other figures:
 
 - **Cache hit rate** = `cacheReadTokens / (inputTokens + cacheReadTokens)`. When
@@ -239,6 +273,29 @@ Other figures:
   would be a hairline. The bucket's label is its first day. Only days that have
   records are drawn, so the axis is a sequence of recorded days rather than a
   strictly linear calendar.
+
+### The rankings
+
+Three tables, each sorted by total tokens descending, with a proportional bar
+behind the total column so the ranking is legible without arithmetic:
+
+- **By model** leads with the model name and sets its provider underneath. Every
+  row previously repeated the provider in its own column, which spent a whole
+  column on a value that rarely varied.
+- **By project** leads with the folder name and sets the directory above it
+  underneath. Every path in this column shared its first thirty characters, so a
+  single clipped line hid the only part that differed; the full path stays in the
+  cell's `title`.
+- **By purpose** translates the three purposes (`chat`, `compaction`,
+  `session-title`) rather than printing the raw key.
+- **Recent calls** lists the selected range's calls newest first, with the status
+  as a chip. Its total column is the cache-inclusive figure the cards report —
+  summing only input and output would print a number two orders of magnitude
+  below the day it belongs to, in a column labelled "total".
+
+Only the call log scrolls inside its own box; the short ranking tables scroll
+with the page. A 330px scroll box inside a 220px card produced a scrollbar that
+could never be reached.
 
 ## Data file
 
@@ -338,13 +395,14 @@ index.js           Host half: the llm/stream recorder, the ledger store, the RPC
 client.js          Browser half: the sidebar-foot entry and the dashboard panel
 cordis.patch.yml   Mounts the Host half into the Loader tree
 test/              Zero-dependency test suite
+dev/               Local preview harness (not shipped; see dev/preview/README.md)
 ```
 
 ```bash
 npm test          # or: node test/run-all.cjs
 ```
 
-316 assertions across seven files:
+317 assertions across seven files:
 
 | File | Covers |
 |---|---|
@@ -352,9 +410,9 @@ npm test          # or: node test/run-all.cjs
 | `store-check.cjs` | Debounced flush, atomic write, **reading the whole day back after a restart**, repeated reads not accumulating, **interleaved flushes from two stores losing no counts**, retention trimming, detail dedup and cap, write-failure and throwing-logger containment, **a failed write being retried on unload instead of dropping its delta** |
 | `recorder-check.cjs` | Chunks pass through unchanged (same object identity), laziness, exactly one record per call, errors rethrown unchanged, consumer abandonment, a throwing sink never reaching the model lane |
 | `route-check.cjs` | 405 / 415 / 400, envelope validation, rpcId echo, unknown method, a throwing store not escaping, all four ranges, the empty ledger |
-| `client-check.cjs` | Bundle load under a stub facade, slot registration and ordering, no-connection degradation, the source state machine, **a range switch superseding an in-flight read and aborting without an error state**, formatting, **the axis step rounding to a nice number and every tick printing at one precision**, chart bucketing, **cache-write parity between bar and card**, **the panel-width container queries and the absence of a viewport breakpoint**, **the tooltip's half-width being a real bound on the tooltip and the gridlines not swallowing the pointer**, **the calendar window being a year to the day, ending on the Host's day rather than UTC's, padded to whole weeks, with quartile shades that ignore empty days and a flat window landing mid-scale**, **the five heat shades being one ladder shared by the grid and its legend**, **no dead stylesheet rule**, payload normalization, matching zh/en key sets and every month/weekday label the calendar indexes |
+| `client-check.cjs` | Bundle load under a stub facade, slot registration and ordering, no-connection degradation, the source state machine, **a range switch superseding an in-flight read and aborting without an error state**, formatting, **the axis step rounding to a nice number and every tick printing at one precision**, chart bucketing, **cache-write parity between bar and card**, **the panel-width container queries and the absence of a viewport breakpoint**, **the tooltip's half-width being a real bound on the tooltip and the gridlines not swallowing the pointer**, **the calendar window being a year to the day, ending on the Host's day rather than UTC's, padded to whole weeks, with quartile shades that ignore empty days and a flat window landing mid-scale**, **the five heat shades being one ladder shared by the grid and its legend**, **the composition bar sharing that same ladder**, **no dead stylesheet rule**, payload normalization, matching zh/en key sets and every month/weekday label the calendar indexes |
 | `integration-check.cjs` | The real `apply()` end to end: one model call → ledger → read back through the route; cwd and purpose dimensions; a failed call counted as an error; flush on unload and continued counts on a second mount; **a recorded call reaching the calendar series under all four ranges**; **an existing ledger surviving a bad retention setting**; an aborted request |
-| `render-check.cjs` | Every branch of both components rendered: wide and rail states, loading/error/no-connection/empty states, **the KPI split into a 3-card headline row and a 6-card compact row with a sub-line on every card**, **a chart whose viewBox matches its rendered width and no `preserveAspectRatio` stretch**, **round axis ticks**, chart geometry and zero-height bars, **a bar scaled to the rounded axis top**, **a bar reaching the card's total with cache writes present**, **the calendar card sitting between the chart and the tables, drawing one cell per day rather than per recorded day, starting on Monday with all seven weekday rows, keeping its window note, and staying a year wide under a one-day range**, **calendar hover through real component state: no tooltip until a hover, the date, weekday, exact total and request count of the hovered day, one outline that moves rather than accumulates and rides on top of the cell's shade, the tooltip inside the positioned box, and a payload with no `calendar` series still rendering**, **the project and purpose cards sharing a row**, **a long project path clipped with its full text kept in `title`**, **an unused segment dimmed in the legend but not dropped**, **chart hover driven through real component state**, **a payload with no `totals` at all**, missing `meta`/`totals` not crashing, accessible names, the footnote's zone |
+| `render-check.cjs` | Every branch of both components rendered: wide and rail states, loading/error/no-connection/empty states, **one hero card over two companion headline readings and a six-cell strip, with a sub-line on every card**, **the hero's composition bar carrying the same four segments and their shares**, **a chart whose viewBox matches its rendered width and no `preserveAspectRatio` stretch**, **round axis ticks**, chart geometry and zero-height bars, **a bar scaled to the rounded axis top**, **a bar reaching the card's total with cache writes present**, **the calendar card sitting between the chart and the tables, drawing one cell per day rather than per recorded day, starting on Monday with all seven weekday rows, keeping its window note, and staying a year wide under a one-day range**, **calendar hover through real component state: no tooltip until a hover, the date, weekday, exact total and request count of the hovered day, one outline that moves rather than accumulates and rides on top of the cell's shade, the tooltip inside the positioned box, and a payload with no `calendar` series still rendering**, **the project and purpose cards sharing a row**, **a project path leading with its folder name while the full path stays in `title`**, **an unused segment dimmed in the legend but not dropped**, **chart hover driven through real component state**, **the cache-hit chip dashing an unknown rate instead of printing 0.0%**, **a payload with no `totals` at all**, missing `meta`/`totals` not crashing, accessible names, the footnote's zone |
 
 Every test seam is exported from the Host half as `__internal` and exercised
 directly.
